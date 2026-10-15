@@ -34,7 +34,7 @@ Usage limits matter most while you are working. Usagebar keeps the current five-
 | --- | --- |
 | Multiple providers | Track Claude, Codex, KimiCode, Cursor, z.ai, and XAI (Grok Build) from one status item. |
 | At-a-glance limits | See rolling-window and weekly percentages without opening a browser. |
-| Focus-aware switching | Show the provider of the AI tool you used last: the Claude, ChatGPT/Codex, Cursor, KimiCode, ZCode, or Grok app, or the Claude Code, Codex, Cursor, Kimi, or Grok CLI running in your terminal. |
+| Focus-aware switching | Show the provider of the AI tool you used last: the Claude, ChatGPT/Codex, Cursor or Grok Bot, KimiCode, ZCode, or Grok app, or the Claude Code, Codex, Cursor, Kimi, or Grok CLI running in your terminal. |
 | Native controls | Refresh, change display mode, switch provider cadence, and launch at login. |
 | Local credential discovery | Reuse supported Claude CLI and Codex CLI sessions already present on the Mac. |
 | Privacy-first operation | No Usagebar account, telemetry, analytics, or intermediary backend. |

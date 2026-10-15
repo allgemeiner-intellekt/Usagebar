@@ -23,6 +23,8 @@ nonisolated struct CursorUsageData {
     /// Grok Bot, Cursor's agent app, is signed in to the same account and so
     /// draws on this subscription too.
     var sharedWithGrokBot = false
+    /// "W" when the reading is Cursor's weekly allowance, "M" for the billing month.
+    var windowLabel = "M"
 
     var timeUntilReset: String {
         guard let resetAt else { return "--" }
@@ -49,6 +51,7 @@ final class CursorAPIService {
     static let shared = CursorAPIService()
 
     private let usageSummaryEndpoint = "https://cursor.com/api/usage-summary"
+    private let usageStatusEndpoint = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus"
 
     private var cachedToken: CursorToken?
     private var lastTokenCheck: Date?
@@ -203,6 +206,13 @@ final class CursorAPIService {
         case 200:
             var usage = try parseUsageSummary(data)
             usage.sharedWithGrokBot = isGrokBotSignedIn(as: token.subject)
+            // Plans with a weekly allowance spend it before the monthly one, and
+            // Cursor and Grok Bot show that weekly figure.
+            if let weekly = await weeklyUsage(token: token) {
+                usage.usedPercent = clampPercent(weekly.percent)
+                usage.resetAt = weekly.resetAt
+                usage.windowLabel = "W"
+            }
             return usage
         case 401, 403:
             clearCache()
@@ -212,6 +222,29 @@ final class CursorAPIService {
         default:
             throw APIError.unknown(httpResponse.statusCode)
         }
+    }
+
+    /// The weekly allowance Cursor and Grok Bot show, or nil when the plan has none
+    /// or the request fails; the monthly summary then stands.
+    private func weeklyUsage(token: CursorToken) async -> (percent: Double, resetAt: Date?)? {
+        guard let url = URL(string: usageStatusEndpoint) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.httpBody = Data("{}".utf8)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        request.setValue("Bearer \(token.accessToken)", forHTTPHeaderField: "Authorization")
+
+        guard let (data, response) = try? await ProviderHTTP.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["hasNonZeroIncludedLimit"] as? Bool == true,
+              let percent = doubleValue(json["usagePercent"]) else {
+            return nil
+        }
+        let resetAt = (json["nextResetTimestampUtc"] as? String).flatMap(parseDate)
+        return (percent, resetAt)
     }
 
     /// Grok Bot keeps its Cursor accounts keyed by the SHA-256 of the account's

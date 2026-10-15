@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.3](https://github.com/betoxf/Usagebar/releases/tag/v1.10.3) — 2026-10-15
+
+- Show Cursor's weekly allowance, the figure Cursor and Grok Bot display, with a `W` label and its weekly reset. Plans without one keep the monthly reading.
+
 ## [1.10.2](https://github.com/betoxf/Usagebar/releases/tag/v1.10.2) — 2026-10-15
 
 - Show Cursor usage while Grok Bot is in front. Grok Bot is Cursor's agent app and draws on the same subscription; when it is signed in to the same account the menu calls the section "Cursor & Grok Bot".

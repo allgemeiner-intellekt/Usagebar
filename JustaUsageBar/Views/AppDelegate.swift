@@ -645,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     resetText: cursor.timeUntilReset,
                     error: viewModel.cursorError,
                     accentColor: brandCursorColor,
-                    windowLabel: "M"
+                    windowLabel: cursor.windowLabel
                 )
             }
 
@@ -1870,7 +1870,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .cursor:
             primary = viewModel.cursorUsageData.usedPercent
             secondary = nil
-            label = "M"
+            label = viewModel.cursorUsageData.windowLabel
         case .kimi:
             primary = viewModel.kimiUsageData.weeklyUsedPercent
             secondary = viewModel.kimiUsageData.fiveHourUsedPercent
@@ -1904,7 +1904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 brandColor: brandCursorColor,
                 usedPercent: viewModel.cursorUsageData.usedPercent,
                 glyph: .cursor,
-                windowLabel: "M"
+                windowLabel: viewModel.cursorUsageData.windowLabel
             )
         case .kimi:
             return createKimiImage()

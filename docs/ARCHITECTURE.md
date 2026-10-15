@@ -87,6 +87,7 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | Claude browser-session usage | `https://claude.ai/api/organizations/{orgId}/usage` |
 | Codex usage | `https://chatgpt.com/backend-api/wham/usage` |
 | Codex OAuth refresh | `https://auth.openai.com/oauth/token` |
+| Cursor weekly allowance | `https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus` |
 | Kimi Code usage | `https://api.kimi.com/coding/v1/usages` |
 | Kimi Code OAuth refresh | `https://auth.kimi.com/api/oauth/token` |
 | Kimi web-token usage fallback | `https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages` |

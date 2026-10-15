@@ -7,6 +7,7 @@
 //  state.vscdb, synthesize a WorkosCursorSessionToken cookie, call the web API.
 //
 
+import CryptoKit
 import Foundation
 import SQLite3
 
@@ -19,6 +20,9 @@ nonisolated struct CursorUsageData {
     /// On-demand / usage-based spend in USD for the current cycle, when present.
     var onDemandUsedUSD: Double?
     var onDemandLimitUSD: Double?
+    /// Grok Bot, Cursor's agent app, is signed in to the same account and so
+    /// draws on this subscription too.
+    var sharedWithGrokBot = false
 
     var timeUntilReset: String {
         guard let resetAt else { return "--" }
@@ -51,6 +55,7 @@ final class CursorAPIService {
     private let tokenCacheTTL: TimeInterval = 300
 
     nonisolated private struct CursorToken {
+        let subject: String
         let userID: String
         let accessToken: String
         let expiresAt: Date?
@@ -105,7 +110,7 @@ final class CursorAPIService {
             expiresAt = Date(timeIntervalSince1970: exp)
         }
 
-        let token = CursorToken(userID: userID, accessToken: accessToken, expiresAt: expiresAt)
+        let token = CursorToken(subject: sub, userID: userID, accessToken: accessToken, expiresAt: expiresAt)
         cachedToken = token
         lastTokenCheck = Date()
         return token
@@ -196,7 +201,9 @@ final class CursorAPIService {
 
         switch httpResponse.statusCode {
         case 200:
-            return try parseUsageSummary(data)
+            var usage = try parseUsageSummary(data)
+            usage.sharedWithGrokBot = isGrokBotSignedIn(as: token.subject)
+            return usage
         case 401, 403:
             clearCache()
             throw APIError.unauthorized
@@ -205,6 +212,22 @@ final class CursorAPIService {
         default:
             throw APIError.unknown(httpResponse.statusCode)
         }
+    }
+
+    /// Grok Bot keeps its Cursor accounts keyed by the SHA-256 of the account's
+    /// subject. Only the keys are compared; its tokens are never read.
+    private func isGrokBotSignedIn(as subject: String) -> Bool {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Grok Bot/sand-secrets.json")
+        guard let data = try? Data(contentsOf: url),
+              let secrets = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let accountsJSON = (secrets["cursor-accounts"] as? String)?.data(using: .utf8),
+              let accounts = (try? JSONSerialization.jsonObject(with: accountsJSON) as? [String: Any])?["accounts"]
+                as? [String: Any] else {
+            return false
+        }
+        let key = SHA256.hash(data: Data(subject.utf8)).map { String(format: "%02x", $0) }.joined()
+        return accounts[key] != nil
     }
 
     // MARK: - Parse

@@ -214,7 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return .codex
         }
         // Cursor ships under a ToDesktop bundle id; match it and the app name.
-        if bundleId == "com.todesktop.230313mzl4w4u92" || name == "cursor" {
+        // Grok Bot is Cursor's agent app and runs on the Cursor subscription.
+        if bundleId == "com.todesktop.230313mzl4w4u92" || bundleId == "com.anysphere.sand" || name == "cursor" {
             return .cursor
         }
         if bundleId.contains("kimi") || bundleId.hasPrefix("com.moonshot.") || name == "kimi" {
@@ -637,7 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let cursor = viewModel.cursorUsageData
                 let planInfo = cursor.planName != "unknown" ? cursor.planName.capitalized : ""
                 appendSimpleProviderSection(
-                    title: "Cursor",
+                    title: cursor.sharedWithGrokBot ? "Cursor & Grok Bot" : "Cursor",
                     titleColor: NSColor.labelColor,
                     subtitle: planInfo,
                     usedPercent: cursor.usedPercent,
@@ -782,7 +783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let followItem = NSMenuItem(title: "Follow Active App", action: #selector(toggleFollowActiveApp), keyEquivalent: "")
                     followItem.target = self
                     followItem.state = viewModel.followActiveApp ? .on : .off
-                    followItem.toolTip = "Show the provider of the AI app or terminal CLI you used last (Claude, ChatGPT/Codex, Cursor, KimiCode, ZCode, or Grok)"
+                    followItem.toolTip = "Show the provider of the AI app or terminal CLI you used last (Claude, ChatGPT/Codex, Cursor or Grok Bot, KimiCode, ZCode, or Grok)"
                     displayMenu.addItem(followItem)
 
                     let intervalMenu = NSMenu()

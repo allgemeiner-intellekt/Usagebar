@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.6](https://github.com/betoxf/Usagebar/releases/tag/v1.10.6) — 2026-10-25
+
+- Show ZCode's Z mark followed by "Code" for z.ai in the menu bar, in black or white to match the menu bar, in place of the pink "Z" and "z.ai".
+
 ## [1.10.5](https://github.com/betoxf/Usagebar/releases/tag/v1.10.5) — 2026-10-25
 
 - Show Cursor's percentage in its black brand color, white on dark menu bars, when usage reaches 90%. It was teal.

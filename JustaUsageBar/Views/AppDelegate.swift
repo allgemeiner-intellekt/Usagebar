@@ -419,10 +419,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             // Claude usage section
             if viewModel.showClaude {
-                let claudeHeader = NSMenuItem(title: "Claude", action: nil, keyEquivalent: "")
-                claudeHeader.isEnabled = false
-                let anthropicOrange = NSColor(red: 0.83, green: 0.53, blue: 0.30, alpha: 1.0)
-
                 // Build header with auth method
                 let authMethod: String = switch viewModel.claudeAuthSource {
                 case .oauth:
@@ -433,21 +429,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     ""
                 }
 
-                let headerString = NSMutableAttributedString()
-                headerString.append(NSAttributedString(string: "\u{2733}\u{FE0E} Claude  ", attributes: [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-                    .foregroundColor: anthropicOrange
-                ]))
-                headerString.append(NSAttributedString(string: "  ", attributes: [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
-                ]))
-                headerString.append(NSAttributedString(string: authMethod, attributes: [
-                    .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                    .foregroundColor: NSColor.secondaryLabelColor
-                ]))
-
-                claudeHeader.attributedTitle = headerString
-                menu.addItem(claudeHeader)
+                var parts: [NSView] = []
+                if let spark = NSImage(named: "ClaudeSpark") {
+                    parts.append(headerMark(spark, height: 14, tint: brandClaudeColor))
+                }
+                parts.append(headerLabel("Claude"))
+                menu.addItem(makeProviderHeader("Claude", parts: parts, subtitle: authMethod))
 
                 if hasClaude {
                     let fiveHour = viewModel.usageData.fiveHourUsed
@@ -543,28 +530,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     menu.addItem(NSMenuItem.separator())
                 }
 
-                let codexHeader = NSMenuItem(title: "Codex", action: nil, keyEquivalent: "")
-                codexHeader.isEnabled = false
-                let codexBlue = NSColor(red: 0.1, green: 0.2, blue: 0.5, alpha: 1.0)
-
                 // Build header with plan type
                 let codex = viewModel.codexUsageData
                 let planInfo = codex.planType != "unknown" ? codex.planType.capitalized : ""
-
-                let headerString = NSMutableAttributedString()
-                headerString.append(NSAttributedString(string: "Codex  ", attributes: [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-                    .foregroundColor: codexBlue
-                ]))
-                if !planInfo.isEmpty {
-                    headerString.append(NSAttributedString(string: planInfo, attributes: [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                        .foregroundColor: NSColor.secondaryLabelColor
-                    ]))
-                }
-
-                codexHeader.attributedTitle = headerString
-                menu.addItem(codexHeader)
+                let lockup: NSView = NSImage(named: "CodexLockup").map { headerMark($0, height: 16) } ?? headerLabel("Codex")
+                menu.addItem(makeProviderHeader("Codex", parts: [lockup], subtitle: planInfo))
 
                 if hasCodex {
                     let primaryLabel = codex.primaryIsWeekly ? "7d" : codex.primaryWindowLabel
@@ -639,6 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let planInfo = cursor.planName != "unknown" ? cursor.planName.capitalized : ""
                 appendSimpleProviderSection(
                     title: cursor.sharedWithGrokBot ? "Cursor & Grok Bot" : "Cursor",
+                    mark: headerMark(cursorPlanMarksImage(height: 11), height: 11),
                     titleColor: NSColor.labelColor,
                     subtitle: planInfo,
                     usedPercent: cursor.usedPercent,
@@ -667,6 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let planInfo = zai.planName != "unknown" ? zai.planName.capitalized : ""
                 appendSimpleProviderSection(
                     title: "z.ai",
+                    mark: zcodeHeaderView(),
                     titleColor: NSColor(red: 0.91, green: 0.35, blue: 0.42, alpha: 1.0),
                     subtitle: planInfo,
                     usedPercent: zai.usedPercent,
@@ -2026,7 +1998,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// item shows those four marks in a centered row instead of a glyph + name.
     /// The marks are vector paths so they stay sharp at any backing scale.
     private func drawCursorPlanMarks(centerX: CGFloat, y: CGFloat, height: CGFloat, color: NSColor) {
-        let gap: CGFloat = 2.5
+        let marks = cursorPlanMarkPaths(height: height)
+        let shift = AffineTransform(translationByX: centerX - marks.width / 2, byY: y)
+        color.setFill()
+        for path in marks.paths {
+            path.transform(using: shift)
+            path.fill()
+        }
+    }
+
+    /// The four marks laid out left to right from the origin, `height` tall.
+    private func cursorPlanMarkPaths(height: CGFloat) -> (paths: [NSBezierPath], width: CGFloat) {
+        let gap = height * 0.3125
         // (unit-space path, its unit width, size relative to `height`)
         let marks: [(path: NSBezierPath, unitWidth: CGFloat, scale: CGFloat)] = [
             (xMarkPath(), 1200 / 1227, 0.8),
@@ -2034,17 +2017,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             (cursorCubePath(), 0.88, 1),
             (grokBotMarkPath(), 1, 1)
         ]
-        let totalWidth = marks.reduce(-gap) { $0 + $1.unitWidth * $1.scale * height + gap }
-        var x = centerX - totalWidth / 2
-        color.setFill()
+        var x: CGFloat = 0
+        var paths: [NSBezierPath] = []
         for mark in marks {
             let size = height * mark.scale
-            var transform = AffineTransform(translationByX: x, byY: y + (height - size) / 2)
+            var transform = AffineTransform(translationByX: x, byY: (height - size) / 2)
             transform.scale(size)
             mark.path.transform(using: transform)
-            mark.path.fill()
+            paths.append(mark.path)
             x += mark.unitWidth * size + gap
         }
+        return (paths, x - gap)
+    }
+
+    private func cursorPlanMarksImage(height: CGFloat) -> NSImage {
+        let marks = cursorPlanMarkPaths(height: height)
+        return templateImage(size: NSSize(width: marks.width, height: height), paths: marks.paths)
+    }
+
+    // MARK: - Menu Provider Headers
+
+    /// A provider's section header. It is a view rather than a disabled item,
+    /// which AppKit dims, so brand marks and names keep full contrast.
+    private func makeProviderHeader(_ title: String, parts: [NSView], subtitle: String) -> NSMenuItem {
+        let stack = NSStackView(views: parts)
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 5
+        if !subtitle.isEmpty, let last = parts.last {
+            let label = NSTextField(labelWithString: subtitle)
+            label.font = .systemFont(ofSize: 11, weight: .regular)
+            label.textColor = .secondaryLabelColor
+            stack.addView(label, in: .leading)
+            stack.setCustomSpacing(8, after: last)
+        }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        container.autoresizingMask = .width
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 30),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -14),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.view = container
+        return item
+    }
+
+    private func headerLabel(_ text: String, color: NSColor = .labelColor) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = color
+        return label
+    }
+
+    /// A brand mark `height` tall, tinted like text.
+    private func headerMark(_ image: NSImage, height: CGFloat, tint: NSColor = .labelColor) -> NSImageView {
+        image.isTemplate = true
+        let view = NSImageView(image: image)
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.contentTintColor = tint
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.heightAnchor.constraint(equalToConstant: height),
+            view.widthAnchor.constraint(equalToConstant: height * image.size.width / image.size.height)
+        ])
+        return view
+    }
+
+    /// ZCode's Z mark with "Code" right after it, as in the status item.
+    private func zcodeHeaderView() -> NSView {
+        let height: CGFloat = 10.6
+        var transform = AffineTransform.identity
+        transform.scale(height)
+        let path = zcodeMarkPath()
+        path.transform(using: transform)
+        let mark = headerMark(templateImage(size: NSSize(width: 1.13 * height, height: height), paths: [path]), height: height)
+        let stack = NSStackView(views: [mark, headerLabel("Code")])
+        stack.spacing = 1.7
+        stack.alignment = .centerY
+        return stack
+    }
+
+    /// Fills `paths` into a vector template image, so it renders sharp and
+    /// takes the tint of the view that shows it.
+    private func templateImage(size: NSSize, paths: [NSBezierPath]) -> NSImage {
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor.black.setFill()
+            paths.forEach { $0.fill() }
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     /// Builds a closed polygon in unit space.
@@ -2551,21 +2618,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func appendKimiProviderSection() {
-        let header = NSMenuItem(title: "KimiCode", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        let headerString = NSMutableAttributedString(string: "KimiCode  ", attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: brandKimiColor
-        ])
-        let authSource = viewModel.kimiAuthSource.displayName
-        if !authSource.isEmpty {
-            headerString.append(NSAttributedString(string: authSource, attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]))
-        }
-        header.attributedTitle = headerString
-        menu.addItem(header)
+        menu.addItem(makeProviderHeader(
+            "KimiCode",
+            parts: [headerLabel("KimiCode", color: brandKimiColor)],
+            subtitle: viewModel.kimiAuthSource.displayName
+        ))
 
         let kimi = viewModel.kimiUsageData
         if let fiveHour = kimi.fiveHourUsedPercent {
@@ -2618,10 +2675,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Header + single "used% • reset" row shared by Cursor and Zai.
+    /// `mark` replaces the written title in the header when given;
     /// `accentColor` (defaults to the title color) highlights high usage;
     /// `windowLabel` prefixes the row (e.g. "M" for a monthly window).
     private func appendSimpleProviderSection(
         title: String,
+        mark: NSView? = nil,
         titleColor: NSColor,
         subtitle: String,
         usedPercent: Int,
@@ -2630,20 +2689,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accentColor: NSColor? = nil,
         windowLabel: String = ""
     ) {
-        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        let headerString = NSMutableAttributedString(string: "\(title)  ", attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: titleColor
-        ])
-        if !subtitle.isEmpty {
-            headerString.append(NSAttributedString(string: subtitle, attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]))
-        }
-        header.attributedTitle = headerString
-        menu.addItem(header)
+        menu.addItem(makeProviderHeader(
+            title,
+            parts: [mark ?? headerLabel(title, color: titleColor)],
+            subtitle: subtitle
+        ))
 
         let valueColor = usageHighlightColor(
             percentage: usedPercent,

@@ -644,7 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     usedPercent: cursor.usedPercent,
                     resetText: cursor.timeUntilReset,
                     error: viewModel.cursorError,
-                    accentColor: brandCursorColor,
+                    accentColor: .labelColor,
                     windowLabel: cursor.windowLabel
                 )
             }
@@ -2503,8 +2503,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSColor(red: 0.14, green: 0.73, blue: 0.94, alpha: 1.0)
     }
 
+    // Cursor's brand is monochrome: black on light menu bars, white on dark.
     private var brandCursorColor: NSColor {
-        NSColor(red: 0.0, green: 0.75, blue: 0.65, alpha: 1.0)
+        getDarkMode() ? .white : .black
     }
 
     private var brandKimiColor: NSColor {

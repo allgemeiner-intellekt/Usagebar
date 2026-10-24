@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.7](https://github.com/betoxf/Usagebar/releases/tag/v1.10.7) — 2026-10-25
+
+- Show each provider's mark in the menu's section headers, at full contrast instead of dimmed: the Claude spark, the Codex logo, Cursor's four plan marks, and ZCode's Z mark with "Code".
+
 ## [1.10.6](https://github.com/betoxf/Usagebar/releases/tag/v1.10.6) — 2026-10-25
 
 - Show ZCode's Z mark followed by "Code" for z.ai in the menu bar, in black or white to match the menu bar, in place of the pink "Z" and "z.ai".

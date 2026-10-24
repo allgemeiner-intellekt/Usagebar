@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.4](https://github.com/betoxf/Usagebar/releases/tag/v1.10.4) — 2026-10-25
+
+- Show the marks of everything Cursor's plan covers (xAI, Grok, Cursor and Grok Bot) above the Cursor percentage in the menu bar, in place of the cube and the "Cursor" name. They are drawn as vectors, so they stay sharp on every display.
+
 ## [1.10.3](https://github.com/betoxf/Usagebar/releases/tag/v1.10.3) — 2026-10-15
 
 - Show Cursor's weekly allowance, the figure Cursor and Grok Bot display, with a `W` label and its weekly reset. Plans without one keep the monthly reading.

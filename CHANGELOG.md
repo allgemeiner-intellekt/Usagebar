@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.5](https://github.com/betoxf/Usagebar/releases/tag/v1.10.5) — 2026-10-25
+
+- Show Cursor's percentage in its black brand color, white on dark menu bars, when usage reaches 90%. It was teal.
+
 ## [1.10.4](https://github.com/betoxf/Usagebar/releases/tag/v1.10.4) — 2026-10-25
 
 - Show the marks of everything Cursor's plan covers (xAI, Grok, Cursor and Grok Bot) above the Cursor percentage in the menu bar, in place of the cube and the "Cursor" name. They are drawn as vectors, so they stay sharp on every display.

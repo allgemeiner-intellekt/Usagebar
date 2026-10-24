@@ -1910,7 +1910,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return createKimiImage()
         case .zai:
             return createSimpleProviderImage(
-                label: "z.ai",
+                label: "Code",
                 brandColor: brandZaiColor,
                 usedPercent: viewModel.zaiUsageData.usedPercent,
                 glyph: .zai,
@@ -1958,12 +1958,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         var yOffset: CGFloat = 0
         if showIcon {
-            // Cursor's marks are monochrome — adapt to the menu bar theme
-            // instead of using the accent color.
+            // Cursor's and ZCode's marks are monochrome — adapt to the menu
+            // bar theme instead of using the accent color.
             let glyphColor: NSColor = switch glyph {
-            case .cursor: isDarkMode ? NSColor.white : NSColor(white: 0.1, alpha: 1.0)
+            case .cursor, .zai: isDarkMode ? NSColor.white : NSColor(white: 0.1, alpha: 1.0)
             case .kimi: brandColor
-            case .zai: brandColor
             case .xai: brandColor
             }
             if glyph == .cursor {
@@ -1974,11 +1973,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
                     .foregroundColor: textColor
                 ]
-                let labelString = NSAttributedString(string: " \(label)", attributes: labelAttributes)
-                let totalWidth = glyphSize + labelString.size().width
+                // The ZCode mark reads as the "Z" of "ZCode", so its label sits closer.
+                let labelString = NSAttributedString(string: glyph == .zai ? label : " \(label)", attributes: labelAttributes)
+                let glyphAdvance: CGFloat = glyph == .zai ? glyphSize + 1 : glyphSize
+                let totalWidth = glyphAdvance + labelString.size().width
                 let startX = (width - totalWidth) / 2
                 drawGlyph(glyph, in: NSRect(x: startX, y: 13, width: glyphSize, height: glyphSize), color: glyphColor)
-                labelString.draw(at: NSPoint(x: startX + glyphSize, y: 12))
+                labelString.draw(at: NSPoint(x: startX + glyphAdvance, y: 12))
             }
             yOffset = 0
         } else {
@@ -2125,7 +2126,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return path
     }
 
-    /// Draws a small brand glyph. Cursor = hexagon mark; Zai = bold Z.
+    /// ZCode mark: a top bar, a long diagonal and a bottom bar split by thin
+    /// slanted gaps, in a unit-height box 1.13 wide.
+    private func zcodeMarkPath() -> NSBezierPath {
+        let path = NSBezierPath()
+        polygon([NSPoint(x: 0, y: 1), NSPoint(x: 0.56, y: 1), NSPoint(x: 0.465, y: 0.86), NSPoint(x: 0, y: 0.86)], into: path)
+        polygon([NSPoint(x: 0.64, y: 1), NSPoint(x: 1.13, y: 1), NSPoint(x: 0.46, y: 0), NSPoint(x: 0, y: 0)], into: path)
+        polygon([NSPoint(x: 0.645, y: 0.16), NSPoint(x: 1.13, y: 0.16), NSPoint(x: 1.13, y: 0), NSPoint(x: 0.537, y: 0)], into: path)
+        return path
+    }
+
+    /// Draws a small brand glyph. Cursor = hexagon mark; Zai = ZCode's Z mark.
     private func drawGlyph(_ glyph: ProviderGlyph, in rect: NSRect, color: NSColor) {
         color.set()
         switch glyph {
@@ -2151,12 +2162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             brandKimiColor.setStroke()
             accent.stroke()
         case .zai:
-            let zAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-                .foregroundColor: color
-            ]
-            let z = NSAttributedString(string: "Z", attributes: zAttrs)
-            z.draw(at: NSPoint(x: rect.minX, y: rect.minY - 1))
+            let path = zcodeMarkPath()
+            let height = rect.width / 1.13
+            var transform = AffineTransform(translationByX: rect.minX, byY: rect.minY + (rect.height - height) / 2)
+            transform.scale(height)
+            path.transform(using: transform)
+            path.fill()
         case .xai:
             let xAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 8, weight: .bold),

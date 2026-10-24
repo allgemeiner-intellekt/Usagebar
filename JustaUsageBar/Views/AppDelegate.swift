@@ -1958,25 +1958,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         var yOffset: CGFloat = 0
         if showIcon {
-            let glyphSize: CGFloat = 7
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
-                .foregroundColor: textColor
-            ]
-            let labelString = NSAttributedString(string: " \(label)", attributes: labelAttributes)
-            let totalWidth = glyphSize + labelString.size().width
-            let startX = (width - totalWidth) / 2
-
-            // Cursor's mark is monochrome (black cube, gray faces) — adapt to
-            // the menu bar theme instead of using the accent color.
+            // Cursor's marks are monochrome — adapt to the menu bar theme
+            // instead of using the accent color.
             let glyphColor: NSColor = switch glyph {
             case .cursor: isDarkMode ? NSColor.white : NSColor(white: 0.1, alpha: 1.0)
             case .kimi: brandColor
             case .zai: brandColor
             case .xai: brandColor
             }
-            drawGlyph(glyph, in: NSRect(x: startX, y: 13, width: glyphSize, height: glyphSize), color: glyphColor)
-            labelString.draw(at: NSPoint(x: startX + glyphSize, y: 12))
+            if glyph == .cursor {
+                drawCursorPlanMarks(centerX: width / 2, y: 12.5, height: 8, color: glyphColor)
+            } else {
+                let glyphSize: CGFloat = 7
+                let labelAttributes: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
+                    .foregroundColor: textColor
+                ]
+                let labelString = NSAttributedString(string: " \(label)", attributes: labelAttributes)
+                let totalWidth = glyphSize + labelString.size().width
+                let startX = (width - totalWidth) / 2
+                drawGlyph(glyph, in: NSRect(x: startX, y: 13, width: glyphSize, height: glyphSize), color: glyphColor)
+                labelString.draw(at: NSPoint(x: startX + glyphSize, y: 12))
+            }
             yOffset = 0
         } else {
             yOffset = 3
@@ -2018,34 +2021,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return (image, width)
     }
 
-    /// Draws a small brand glyph. Cursor = isometric cube; Zai = bold Z.
+    /// Cursor's plan is shared by xAI, Grok, Cursor and Grok Bot, so its status
+    /// item shows those four marks in a centered row instead of a glyph + name.
+    /// The marks are vector paths so they stay sharp at any backing scale.
+    private func drawCursorPlanMarks(centerX: CGFloat, y: CGFloat, height: CGFloat, color: NSColor) {
+        let gap: CGFloat = 2.5
+        // (unit-space path, its unit width, size relative to `height`)
+        let marks: [(path: NSBezierPath, unitWidth: CGFloat, scale: CGFloat)] = [
+            (xMarkPath(), 1200 / 1227, 0.8),
+            (grokMarkPath(), 1, 1),
+            (cursorCubePath(), 0.88, 1),
+            (grokBotMarkPath(), 1, 1)
+        ]
+        let totalWidth = marks.reduce(-gap) { $0 + $1.unitWidth * $1.scale * height + gap }
+        var x = centerX - totalWidth / 2
+        color.setFill()
+        for mark in marks {
+            let size = height * mark.scale
+            var transform = AffineTransform(translationByX: x, byY: y + (height - size) / 2)
+            transform.scale(size)
+            mark.path.transform(using: transform)
+            mark.path.fill()
+            x += mark.unitWidth * size + gap
+        }
+    }
+
+    /// Builds a closed polygon in unit space.
+    private func polygon(_ points: [NSPoint], into path: NSBezierPath) {
+        path.move(to: points[0])
+        for point in points.dropFirst() { path.line(to: point) }
+        path.close()
+    }
+
+    /// X (xAI) mark: a hollow thick stroke and a thin stroke, from the
+    /// official 1200×1227 outline, flipped to y-up and scaled to unit height.
+    private func xMarkPath() -> NSBezierPath {
+        func p(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: x / 1227, y: (1227 - y) / 1227) }
+        let path = NSBezierPath()
+        path.windingRule = .evenOdd
+        polygon([
+            p(714.163, 519.284), p(1160.89, 0), p(1055.03, 0), p(667.137, 450.887),
+            p(357.328, 0), p(0, 0), p(468.492, 681.821), p(0, 1226.37), p(105.866, 1226.37),
+            p(515.491, 750.218), p(842.672, 1226.37), p(1200, 1226.37)
+        ], into: path)
+        polygon([
+            p(569.165, 687.828), p(521.697, 619.934), p(144.011, 79.6944), p(306.615, 79.6944),
+            p(611.412, 515.685), p(658.88, 583.579), p(1055.08, 1150.3), p(892.476, 1150.3)
+        ], into: path)
+        return path
+    }
+
+    /// Grok mark: a ring broken by a diagonal needle that tapers past it.
+    private func grokMarkPath() -> NSBezierPath {
+        let center = NSPoint(x: 0.5, y: 0.5)
+        let k: CGFloat = 0.5 / 1.36            // ring radius 1 in a unit box
+        let path = NSBezierPath()
+        for (start, end) in [(CGFloat(62), CGFloat(224)), (245, 405)] {
+            let radians = start * .pi / 180
+            path.move(to: NSPoint(x: center.x + k * cos(radians), y: center.y + k * sin(radians)))
+            path.appendArc(withCenter: center, radius: k, startAngle: start, endAngle: end)
+            path.appendArc(withCenter: center, radius: 0.7 * k, startAngle: end, endAngle: start, clockwise: true)
+            path.close()
+        }
+        let u = NSPoint(x: cos(CGFloat.pi / 4) * k, y: sin(CGFloat.pi / 4) * k)
+        func p(along a: CGFloat, across c: CGFloat) -> NSPoint {
+            NSPoint(x: center.x + u.x * a - u.y * c, y: center.y + u.y * a + u.x * c)
+        }
+        polygon([
+            p(along: 1.9, across: 0), p(along: 0.92, across: 0.09), p(along: 0, across: 0.035),
+            p(along: -0.92, across: 0.09), p(along: -1.9, across: 0), p(along: -0.92, across: -0.09),
+            p(along: 0, across: -0.035), p(along: 0.92, across: -0.09)
+        ], into: path)
+        return path
+    }
+
+    /// Cursor mark: a pointy-top hexagon with an arrow-shaped facet cut out.
+    private func cursorCubePath() -> NSBezierPath {
+        let r: CGFloat = 0.5
+        let center = NSPoint(x: 0.44, y: 0.5)
+        func p(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: center.x + x * r, y: center.y + y * r) }
+        let path = NSBezierPath()
+        path.windingRule = .evenOdd
+        polygon([p(0, 1), p(0.866, 0.5), p(0.866, -0.5), p(0, -1), p(-0.866, -0.5), p(-0.866, 0.5)], into: path)
+        polygon([p(-0.74, 0.43), p(0.74, 0.43), p(0.01, -0.86), p(0.01, 0)], into: path)
+        return path
+    }
+
+    /// Grok Bot mark: a ball with two tilted capsule eyes cut out.
+    private func grokBotMarkPath() -> NSBezierPath {
+        let path = NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: 1, height: 1))
+        path.windingRule = .evenOdd
+        for (eyeCenter, length, width) in [(NSPoint(x: 0.51, y: 0.61), CGFloat(0.21), CGFloat(0.12)),
+                                           (NSPoint(x: 0.78, y: 0.72), 0.23, 0.11)] {
+            let eye = NSBezierPath(
+                roundedRect: NSRect(x: -width / 2, y: -length / 2, width: width, height: length),
+                xRadius: width / 2, yRadius: width / 2
+            )
+            var transform = AffineTransform(translationByX: eyeCenter.x, byY: eyeCenter.y)
+            transform.rotate(byDegrees: 30)
+            eye.transform(using: transform)
+            path.append(eye)
+        }
+        return path
+    }
+
+    /// Draws a small brand glyph. Cursor = hexagon mark; Zai = bold Z.
     private func drawGlyph(_ glyph: ProviderGlyph, in rect: NSRect, color: NSColor) {
         color.set()
         switch glyph {
         case .cursor:
-            // Isometric cube like Cursor's logo: a pointy-top hexagon split
-            // into three rhombus faces with distinct shading.
-            let cx = rect.midX, cy = rect.midY
-            let r = rect.width / 2
-            func vertex(_ degrees: CGFloat) -> NSPoint {
-                let rad = degrees * .pi / 180
-                return NSPoint(x: cx + r * cos(rad), y: cy + r * sin(rad))
-            }
-            let center = NSPoint(x: cx, y: cy)
-            let top = vertex(90), upLeft = vertex(150), downLeft = vertex(210)
-            let bottom = vertex(270), downRight = vertex(330), upRight = vertex(30)
-
-            func fillFace(_ points: [NSPoint], alpha: CGFloat) {
-                let path = NSBezierPath()
-                path.move(to: points[0])
-                for point in points.dropFirst() { path.line(to: point) }
-                path.close()
-                color.withAlphaComponent(alpha).setFill()
-                path.fill()
-            }
-            fillFace([upLeft, top, upRight, center], alpha: 1.0)          // top
-            fillFace([upLeft, center, bottom, downLeft], alpha: 0.62)     // left
-            fillFace([center, upRight, downRight, bottom], alpha: 0.30)   // right
+            let path = cursorCubePath()
+            var transform = AffineTransform(translationByX: rect.minX, byY: rect.minY)
+            transform.scale(rect.height)
+            path.transform(using: transform)
+            path.fill()
         case .kimi:
             let kAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 8, weight: .bold),

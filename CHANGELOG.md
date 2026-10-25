@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.11.0](https://github.com/betoxf/Usagebar/releases/tag/v1.11.0) — 2026-10-25
+
+- Open a usage panel from the menu bar instead of a menu: one card per provider with its mark, plan, usage meters and reset times, the same design as Usagebar for Windows. Click a card to show that provider in the menu bar.
+- Display, Launch at Login, sign-out and update settings moved to the panel's ⋯ button. An available update shows in the panel's footer.
+
 ## [1.10.7](https://github.com/betoxf/Usagebar/releases/tag/v1.10.7) — 2026-10-25
 
 - Show each provider's mark in the menu's section headers, at full contrast instead of dimmed: the Claude spark, the Codex logo, Cursor's four plan marks, and ZCode's Z mark with "Code".

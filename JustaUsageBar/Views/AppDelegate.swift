@@ -18,7 +18,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var menu: NSMenu!
     private var isMenuOpen = false {
-        didSet { viewModel.menuVisibilityChanged(isOpen: isMenuOpen) }
+        didSet { viewModel.menuVisibilityChanged(isOpen: isMenuOpen || isPanelOpen) }
+    }
+    private let panelModel = UsagePanelModel()
+    private lazy var panel: UsagePanel = {
+        let panel = UsagePanel(rootView: UsagePanelView(model: panelModel))
+        panel.onClose = { [weak self] in self?.isPanelOpen = false }
+        return panel
+    }()
+    /// While the panel is open every provider refreshes at the on-screen rate.
+    private var isPanelOpen = false {
+        didSet { viewModel.menuVisibilityChanged(isOpen: isMenuOpen || isPanelOpen) }
     }
     private var lastRenderKey: StatusRenderKey?
     private var cachedStatusImages: [DisplayProvider: (StatusRenderKey, NSImage, CGFloat)] = [:]
@@ -396,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildMenu() {
+        updatePanel()
         // Countdown labels are recomputed on open. Closed menus need no work,
         // and replacing the items would close a submenu the pointer is in.
         guard isMenuOpen, menu.highlightedItem?.submenu == nil else { return }
@@ -417,249 +428,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             kimiSetupItem.target = self
             menu.addItem(kimiSetupItem)
         } else {
-            // Claude usage section
-            if viewModel.showClaude {
-                // Build header with auth method
-                let authMethod: String = switch viewModel.claudeAuthSource {
-                case .oauth:
-                    "via OAuth"
-                case .webSession:
-                    "via Browser"
-                case .none:
-                    ""
-                }
-
-                var parts: [NSView] = []
-                if let spark = NSImage(named: "ClaudeSpark") {
-                    parts.append(headerMark(spark, height: 14, tint: brandClaudeColor))
-                }
-                parts.append(headerLabel("Claude"))
-                menu.addItem(makeProviderHeader("Claude", parts: parts, subtitle: authMethod))
-
-                if hasClaude {
-                    let fiveHour = viewModel.usageData.fiveHourUsed
-                    let weekly = viewModel.usageData.weeklyUsed
-                    let fiveHourReset = viewModel.usageData.timeUntilFiveHourReset
-                    let weeklyReset = viewModel.usageData.timeUntilWeeklyReset
-
-                    let fiveHourColor = usageHighlightColor(
-                        percentage: fiveHour,
-                        highThreshold: 90,
-                        accentColor: brandClaudeColor,
-                        fallback: NSColor.labelColor
-                    )
-                    let weeklyColor = usageHighlightColor(
-                        percentage: weekly,
-                        highThreshold: 80,
-                        accentColor: brandClaudeColor,
-                        fallback: NSColor.labelColor
-                    )
-
-                    let fiveHourItem = NSMenuItem(title: "  5h: \(fiveHour)%  \u{2022}  \(fiveHourReset)", action: nil, keyEquivalent: "")
-                    fiveHourItem.isEnabled = false
-                    let fiveHourAttrs: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .regular)
-                    ]
-                    let fiveHourString = NSMutableAttributedString(string: "  5h: ", attributes: fiveHourAttrs)
-                    fiveHourString.append(NSAttributedString(string: "\(fiveHour)", attributes: [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                        .foregroundColor: fiveHourColor
-                    ]))
-                    fiveHourString.append(NSAttributedString(string: "%  \u{2022}  \(fiveHourReset)", attributes: fiveHourAttrs))
-                    fiveHourItem.attributedTitle = fiveHourString
-                    menu.addItem(fiveHourItem)
-
-                    let weeklyItem = NSMenuItem(title: "  7d: \(weekly)%  \u{2022}  \(weeklyReset)", action: nil, keyEquivalent: "")
-                    weeklyItem.isEnabled = false
-                    let weeklyAttrs: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .regular)
-                    ]
-                    let weeklyString = NSMutableAttributedString(string: "  7d: ", attributes: weeklyAttrs)
-                    weeklyString.append(NSAttributedString(string: "\(weekly)", attributes: [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                        .foregroundColor: weeklyColor
-                    ]))
-                    weeklyString.append(NSAttributedString(string: "%  \u{2022}  \(weeklyReset)", attributes: weeklyAttrs))
-                    weeklyItem.attributedTitle = weeklyString
-                    menu.addItem(weeklyItem)
-
-                    if viewModel.usageData.hasFableData {
-                        let fable = viewModel.usageData.fableUsed ?? 0
-                        let fableReset = viewModel.usageData.timeUntilFableReset
-                        let fableColor = usageHighlightColor(
-                            percentage: fable,
-                            highThreshold: 80,
-                            accentColor: brandClaudeColor,
-                            fallback: NSColor.labelColor
-                        )
-
-                        let fableItem = NSMenuItem(title: "  Fable: \(fable)%  \u{2022}  \(fableReset)", action: nil, keyEquivalent: "")
-                        fableItem.isEnabled = false
-                        let fableAttrs: [NSAttributedString.Key: Any] = [
-                            .font: NSFont.systemFont(ofSize: 11, weight: .regular)
-                        ]
-                        let fableString = NSMutableAttributedString(string: "  Fable: ", attributes: fableAttrs)
-                        fableString.append(NSAttributedString(string: "\(fable)", attributes: [
-                            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                            .foregroundColor: fableColor
-                        ]))
-                        fableString.append(NSAttributedString(string: "%  \u{2022}  \(fableReset)", attributes: fableAttrs))
-                        fableItem.attributedTitle = fableString
-                        menu.addItem(fableItem)
-                    }
-
-                    if let claudeError = viewModel.claudeError {
-                        menu.addItem(makeStatusMessageItem(claudeError, color: .systemOrange))
-                        if shouldPromptClaudeAuthentication {
-                            let authItem = NSMenuItem(title: "How to authenticate Claude", action: #selector(authenticateClaude), keyEquivalent: "")
-                            authItem.target = self
-                            menu.addItem(authItem)
-                        }
-                    }
-                } else {
-                    menu.addItem(makeStatusMessageItem("Not authenticated", color: .secondaryLabelColor))
-                    let authItem = NSMenuItem(title: "How to authenticate Claude", action: #selector(authenticateClaude), keyEquivalent: "")
-                    authItem.target = self
-                    menu.addItem(authItem)
-                }
-            }
-
-            // Codex usage section
-            if viewModel.showCodex {
-                if viewModel.showClaude {
-                    menu.addItem(NSMenuItem.separator())
-                }
-
-                // Build header with plan type
-                let codex = viewModel.codexUsageData
-                let planInfo = codex.planType != "unknown" ? codex.planType.capitalized : ""
-                let lockup: NSView = NSImage(named: "CodexLockup").map { headerMark($0, height: 16) } ?? headerLabel("Codex")
-                menu.addItem(makeProviderHeader("Codex", parts: [lockup], subtitle: planInfo))
-
-                if hasCodex {
-                    let primaryLabel = codex.primaryIsWeekly ? "7d" : codex.primaryWindowLabel
-                    let primary = codex.primaryUsedPercent
-                    let primaryReset = codex.timeUntilPrimaryReset
-
-                    let primaryColor = usageHighlightColor(
-                        percentage: primary,
-                        highThreshold: 90,
-                        accentColor: brandCodexColor,
-                        fallback: NSColor.labelColor
-                    )
-
-                    let primaryItem = NSMenuItem(title: "  \(primaryLabel): \(primary)%  \u{2022}  \(primaryReset)", action: nil, keyEquivalent: "")
-                    primaryItem.isEnabled = false
-                    let primaryAttrs: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .regular)
-                    ]
-                    let primaryString = NSMutableAttributedString(string: "  \(primaryLabel): ", attributes: primaryAttrs)
-                    primaryString.append(NSAttributedString(string: "\(primary)", attributes: [
-                        .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                        .foregroundColor: primaryColor
-                    ]))
-                    primaryString.append(NSAttributedString(string: "%  \u{2022}  \(primaryReset)", attributes: primaryAttrs))
-                    primaryItem.attributedTitle = primaryString
-                    menu.addItem(primaryItem)
-
-                    if !codex.primaryIsWeekly, codex.secondaryUsedPercent > 0 || codex.secondaryResetAt != nil {
-                        let secondary = codex.secondaryUsedPercent
-                        let secondaryReset = codex.timeUntilSecondaryReset
-                        let secondaryColor = usageHighlightColor(
-                            percentage: secondary,
-                            highThreshold: 80,
-                            accentColor: brandCodexColor,
-                            fallback: NSColor.labelColor
-                        )
-
-                        let secondaryItem = NSMenuItem(title: "  7d: \(secondary)%  \u{2022}  \(secondaryReset)", action: nil, keyEquivalent: "")
-                        secondaryItem.isEnabled = false
-                        let secondaryString = NSMutableAttributedString(string: "  7d: ", attributes: primaryAttrs)
-                        secondaryString.append(NSAttributedString(string: "\(secondary)", attributes: [
-                            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                            .foregroundColor: secondaryColor
-                        ]))
-                        secondaryString.append(NSAttributedString(string: "%  \u{2022}  \(secondaryReset)", attributes: primaryAttrs))
-                        secondaryItem.attributedTitle = secondaryString
-                        menu.addItem(secondaryItem)
-                    }
-
-                    if let codexError = viewModel.codexError {
-                        menu.addItem(makeStatusMessageItem(codexError, color: .systemOrange))
-                        if shouldPromptCodexAuthentication {
-                            let authItem = NSMenuItem(title: "How to authenticate Codex", action: #selector(authenticateCodex), keyEquivalent: "")
-                            authItem.target = self
-                            menu.addItem(authItem)
-                        }
-                    }
-                } else {
-                    menu.addItem(makeStatusMessageItem("Not authenticated", color: .secondaryLabelColor))
-                    let authItem = NSMenuItem(title: "How to authenticate Codex", action: #selector(authenticateCodex), keyEquivalent: "")
-                    authItem.target = self
-                    menu.addItem(authItem)
-                }
-            }
-
-            // Cursor usage section
-            if hasCursor && viewModel.showCursor {
-                if viewModel.showClaude || viewModel.showCodex {
-                    menu.addItem(NSMenuItem.separator())
-                }
-                let cursor = viewModel.cursorUsageData
-                let planInfo = cursor.planName != "unknown" ? cursor.planName.capitalized : ""
-                appendSimpleProviderSection(
-                    title: cursor.sharedWithGrokBot ? "Cursor & Grok Bot" : "Cursor",
-                    mark: headerMark(cursorPlanMarksImage(height: 11), height: 11),
-                    titleColor: NSColor.labelColor,
-                    subtitle: planInfo,
-                    usedPercent: cursor.usedPercent,
-                    resetText: cursor.timeUntilReset,
-                    error: viewModel.cursorError,
-                    accentColor: .labelColor,
-                    windowLabel: cursor.windowLabel
-                )
-            }
-
-            // Kimi usage section
-            if hasKimi && viewModel.showKimi {
-                if viewModel.showClaude || viewModel.showCodex || (hasCursor && viewModel.showCursor) {
-                    menu.addItem(NSMenuItem.separator())
-                }
-                appendKimiProviderSection()
-            }
-
-            // Zai usage section
-            if hasZai && viewModel.showZai {
-                if viewModel.showClaude || viewModel.showCodex ||
-                    (hasCursor && viewModel.showCursor) || (hasKimi && viewModel.showKimi) {
-                    menu.addItem(NSMenuItem.separator())
-                }
-                let zai = viewModel.zaiUsageData
-                let planInfo = zai.planName != "unknown" ? zai.planName.capitalized : ""
-                appendSimpleProviderSection(
-                    title: "z.ai",
-                    mark: zcodeHeaderView(),
-                    titleColor: NSColor(red: 0.91, green: 0.35, blue: 0.42, alpha: 1.0),
-                    subtitle: planInfo,
-                    usedPercent: zai.usedPercent,
-                    resetText: zai.timeUntilReset,
-                    error: viewModel.zaiError,
-                    windowLabel: zai.windowLabel
-                )
-            }
-
-            // XAI / Grok Build usage section
-            if hasXai && viewModel.showXai {
-                if viewModel.showClaude || viewModel.showCodex ||
-                    (hasCursor && viewModel.showCursor) || (hasKimi && viewModel.showKimi) ||
-                    (hasZai && viewModel.showZai) {
-                    menu.addItem(NSMenuItem.separator())
-                }
-                appendXaiProviderSection()
-            }
-
-            menu.addItem(NSMenuItem.separator())
-
             // Refresh
             let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshData), keyEquivalent: "r")
             refreshItem.target = self
@@ -866,24 +634,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Menu Actions
 
-    private func showMenu() {
-        // Populate before asking AppKit to open it, including the first empty menu.
-        isMenuOpen = true
-        rebuildMenu()
-        statusItem.menu = menu
-        defer {
-            statusItem.menu = nil
-            isMenuOpen = false
+    // MARK: - Usage Panel
+
+    private func togglePanel() {
+        if panel.isVisible {
+            panel.close()
+            return
         }
-        statusItem.button?.performClick(nil)
+        guard let button = statusItem.button else { return }
+        configurePanelActions()
+        isPanelOpen = true
+        updatePanel()
+        panel.show(below: button)
+    }
+
+    /// Fills the panel from the normalized usage models. Runs whenever the
+    /// open menu would be rebuilt.
+    private func updatePanel() {
+        guard isPanelOpen else { return }
+        panelModel.needsSetup = !viewModel.hasCredentials
+        panelModel.cards = panelCards()
+        panelModel.currentProvider = viewModel.hasCredentials ? currentProvider : nil
+        panelModel.updateVersion = availableUpdateVersion
+        panelModel.isRefreshing = viewModel.isLoading
+        panelModel.updatedText = updatedText(viewModel.lastUpdated)
+        if panelModel.cursorMarks == nil {
+            panelModel.cursorMarks = cursorPlanMarksImage(height: 12)
+            var transform = AffineTransform.identity
+            transform.scale(10.6)
+            let zMark = zcodeMarkPath()
+            zMark.transform(using: transform)
+            panelModel.zcodeMark = templateImage(size: NSSize(width: 1.13 * 10.6, height: 10.6), paths: [zMark])
+        }
+        DispatchQueue.main.async { [weak self] in self?.panel.fitContent() }
+    }
+
+    private func updatedText(_ date: Date?) -> String {
+        guard let date else { return "" }
+        let minutes = Int(Date().timeIntervalSince(date) / 60)
+        return minutes < 1 ? "Updated just now" : "Updated \(minutes)m ago"
+    }
+
+    private func panelCards() -> [UsagePanelCard] {
+        var cards: [UsagePanelCard] = []
+
+        if viewModel.showClaude {
+            let detail: String = switch viewModel.claudeAuthSource {
+            case .oauth: "via OAuth"
+            case .webSession: "via Browser"
+            case .none: ""
+            }
+            if viewModel.hasClaudeCredentials {
+                let usage = viewModel.usageData
+                var rows = [
+                    UsagePanelRow(label: "5h", percent: usage.fiveHourUsed, resetText: usage.timeUntilFiveHourReset),
+                    UsagePanelRow(label: "7d", percent: usage.weeklyUsed, resetText: usage.timeUntilWeeklyReset)
+                ]
+                if usage.hasFableData {
+                    rows.append(UsagePanelRow(label: "Fable", percent: usage.fableUsed ?? 0, resetText: usage.timeUntilFableReset))
+                }
+                let error = viewModel.claudeError
+                cards.append(UsagePanelCard(
+                    provider: .claude, detail: detail, rows: rows, message: error,
+                    actionTitle: error != nil && shouldPromptClaudeAuthentication ? "How to authenticate Claude" : nil
+                ))
+            } else {
+                cards.append(UsagePanelCard(
+                    provider: .claude, detail: detail, rows: [],
+                    message: "Not authenticated", actionTitle: "How to authenticate Claude"
+                ))
+            }
+        }
+
+        if viewModel.showCodex {
+            let codex = viewModel.codexUsageData
+            let detail = codex.planType != "unknown" ? codex.planType.capitalized : ""
+            if viewModel.hasCodexCredentials {
+                var rows = [UsagePanelRow(
+                    label: codex.primaryIsWeekly ? "7d" : codex.primaryWindowLabel,
+                    percent: codex.primaryUsedPercent,
+                    resetText: codex.timeUntilPrimaryReset
+                )]
+                if !codex.primaryIsWeekly, codex.secondaryUsedPercent > 0 || codex.secondaryResetAt != nil {
+                    rows.append(UsagePanelRow(label: "7d", percent: codex.secondaryUsedPercent, resetText: codex.timeUntilSecondaryReset))
+                }
+                let error = viewModel.codexError
+                cards.append(UsagePanelCard(
+                    provider: .codex, detail: detail, rows: rows, message: error,
+                    actionTitle: error != nil && shouldPromptCodexAuthentication ? "How to authenticate Codex" : nil
+                ))
+            } else {
+                cards.append(UsagePanelCard(
+                    provider: .codex, detail: detail, rows: [],
+                    message: "Not authenticated", actionTitle: "How to authenticate Codex"
+                ))
+            }
+        }
+
+        if viewModel.hasCursorCredentials && viewModel.showCursor {
+            let cursor = viewModel.cursorUsageData
+            cards.append(UsagePanelCard(
+                provider: .cursor,
+                detail: cursor.planName != "unknown" ? cursor.planName.capitalized : "",
+                rows: [UsagePanelRow(label: cursor.windowLabel, percent: cursor.usedPercent, resetText: cursor.timeUntilReset)],
+                message: viewModel.cursorError
+            ))
+        }
+
+        if viewModel.hasKimiCredentials && viewModel.showKimi {
+            let kimi = viewModel.kimiUsageData
+            var rows: [UsagePanelRow] = []
+            if let fiveHour = kimi.fiveHourUsedPercent {
+                rows.append(UsagePanelRow(label: "5h", percent: fiveHour, resetText: kimi.timeUntilFiveHourReset))
+            }
+            rows.append(UsagePanelRow(label: "7d", percent: kimi.weeklyUsedPercent, resetText: kimi.timeUntilWeeklyReset))
+            let error = viewModel.kimiError
+            cards.append(UsagePanelCard(
+                provider: .kimi, detail: viewModel.kimiAuthSource.displayName, rows: rows,
+                message: error, actionTitle: error != nil ? "KimiCode Setup…" : nil
+            ))
+        }
+
+        if viewModel.hasZaiCredentials && viewModel.showZai {
+            let zai = viewModel.zaiUsageData
+            cards.append(UsagePanelCard(
+                provider: .zai,
+                detail: zai.planName != "unknown" ? zai.planName.capitalized : "",
+                rows: [UsagePanelRow(label: zai.windowLabel, percent: zai.usedPercent, resetText: zai.timeUntilReset)],
+                message: viewModel.zaiError
+            ))
+        }
+
+        if viewModel.hasXaiCredentials && viewModel.showXai {
+            let xai = viewModel.xaiUsageData
+            cards.append(UsagePanelCard(
+                provider: .xai,
+                detail: xai.planName != "unknown" ? xai.planName : "",
+                rows: [UsagePanelRow(label: "7d", percent: xai.primaryUsedPercent, resetText: xai.timeUntilWeeklyReset)],
+                message: viewModel.xaiError
+            ))
+        }
+        return cards
+    }
+
+    private func configurePanelActions() {
+        panelModel.onSelect = { [weak self] provider in
+            guard let self, self.canDisplay(provider) else { return }
+            // A pick in the panel wins like a click on the status item.
+            self.focusProvider = nil
+            self.setCurrentProvider(provider)
+            self.restartProviderAnimation()
+            self.updateStatusImage()
+            self.updatePanel()
+        }
+        panelModel.onAction = { [weak self] provider in
+            self?.panel.close()
+            switch provider {
+            case .claude: self?.authenticateClaude()
+            case .codex: self?.authenticateCodex()
+            case .kimi: self?.authenticateKimi()
+            case .cursor, .zai, .xai: break
+            }
+        }
+        panelModel.onRefresh = { [weak self] in
+            self?.panelModel.isRefreshing = true
+            self?.refreshData()
+        }
+        panelModel.onMore = { [weak self] anchor in
+            guard let self else { return }
+            self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.maxY + 4), in: anchor)
+        }
+        panelModel.onUpdate = { [weak self] in self?.checkForUpdates() }
+        panelModel.onSetup = { [weak self] in
+            self?.panel.close()
+            self?.showCredentialsWindow()
+        }
+        panelModel.onSetUpKimi = { [weak self] in
+            self?.panel.close()
+            self?.authenticateKimi()
+        }
+        panelModel.onQuit = { NSApp.terminate(nil) }
     }
 
     @objc private func statusBarButtonClicked() {
         let event = NSApp.currentEvent
 
-        // Right click shows menu
+        // Right click shows the usage panel
         if event?.type == .rightMouseUp {
-            showMenu()
+            togglePanel()
             return
         }
 
@@ -898,8 +836,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 setCurrentProvider(next)
                 restartProviderAnimation()
             } else {
-                // If only one provider, show menu
-                showMenu()
+                // If only one provider, show the usage panel
+                togglePanel()
             }
         }
     }
@@ -2035,73 +1973,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return templateImage(size: NSSize(width: marks.width, height: height), paths: marks.paths)
     }
 
-    // MARK: - Menu Provider Headers
-
-    /// A provider's section header. It is a view rather than a disabled item,
-    /// which AppKit dims, so brand marks and names keep full contrast.
-    private func makeProviderHeader(_ title: String, parts: [NSView], subtitle: String) -> NSMenuItem {
-        let stack = NSStackView(views: parts)
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 5
-        if !subtitle.isEmpty, let last = parts.last {
-            let label = NSTextField(labelWithString: subtitle)
-            label.font = .systemFont(ofSize: 11, weight: .regular)
-            label.textColor = .secondaryLabelColor
-            stack.addView(label, in: .leading)
-            stack.setCustomSpacing(8, after: last)
-        }
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        container.autoresizingMask = .width
-        container.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 30),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -14),
-            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-        ])
-
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.view = container
-        return item
-    }
-
-    private func headerLabel(_ text: String, color: NSColor = .labelColor) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = color
-        return label
-    }
-
-    /// A brand mark `height` tall, tinted like text.
-    private func headerMark(_ image: NSImage, height: CGFloat, tint: NSColor = .labelColor) -> NSImageView {
-        image.isTemplate = true
-        let view = NSImageView(image: image)
-        view.imageScaling = .scaleProportionallyUpOrDown
-        view.contentTintColor = tint
-        view.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            view.heightAnchor.constraint(equalToConstant: height),
-            view.widthAnchor.constraint(equalToConstant: height * image.size.width / image.size.height)
-        ])
-        return view
-    }
-
-    /// ZCode's Z mark with "Code" right after it, as in the status item.
-    private func zcodeHeaderView() -> NSView {
-        let height: CGFloat = 10.6
-        var transform = AffineTransform.identity
-        transform.scale(height)
-        let path = zcodeMarkPath()
-        path.transform(using: transform)
-        let mark = headerMark(templateImage(size: NSSize(width: 1.13 * height, height: height), paths: [path]), height: height)
-        let stack = NSStackView(views: [mark, headerLabel("Code")])
-        stack.spacing = 1.7
-        stack.alignment = .centerY
-        return stack
-    }
-
     /// Fills `paths` into a vector template image, so it renders sharp and
     /// takes the tint of the view that shows it.
     private func templateImage(size: NSSize, paths: [NSBezierPath]) -> NSImage {
@@ -2615,118 +2486,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var shouldPromptCodexAuthentication: Bool {
         !viewModel.hasCodexCredentials || viewModel.codexError == APIError.unauthorized.errorDescription
-    }
-
-    private func appendKimiProviderSection() {
-        menu.addItem(makeProviderHeader(
-            "KimiCode",
-            parts: [headerLabel("KimiCode", color: brandKimiColor)],
-            subtitle: viewModel.kimiAuthSource.displayName
-        ))
-
-        let kimi = viewModel.kimiUsageData
-        if let fiveHour = kimi.fiveHourUsedPercent {
-            appendKimiUsageRow(label: "5h", percentage: fiveHour, resetText: kimi.timeUntilFiveHourReset)
-        }
-        appendKimiUsageRow(label: "7d", percentage: kimi.weeklyUsedPercent, resetText: kimi.timeUntilWeeklyReset)
-
-        if let error = viewModel.kimiError {
-            menu.addItem(makeStatusMessageItem(error, color: .systemOrange))
-            let authItem = NSMenuItem(title: "KimiCode Setup…", action: #selector(authenticateKimi), keyEquivalent: "")
-            authItem.target = self
-            menu.addItem(authItem)
-        }
-    }
-
-    private func appendKimiUsageRow(label: String, percentage: Int, resetText: String) {
-        let row = NSMenuItem(title: "  \(label): \(percentage)%  \u{2022}  \(resetText)", action: nil, keyEquivalent: "")
-        row.isEnabled = false
-        let valueColor = usageHighlightColor(
-            percentage: percentage,
-            highThreshold: label == "5h" ? 90 : 80,
-            accentColor: brandKimiColor,
-            fallback: NSColor.labelColor
-        )
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .regular)]
-        let rowString = NSMutableAttributedString(string: "  \(label): ", attributes: attrs)
-        rowString.append(NSAttributedString(string: "\(percentage)", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: valueColor
-        ]))
-        rowString.append(NSAttributedString(string: "%  \u{2022}  \(resetText)", attributes: attrs))
-        row.attributedTitle = rowString
-        menu.addItem(row)
-    }
-
-    private func appendXaiProviderSection() {
-        let xai = viewModel.xaiUsageData
-        let planInfo = xai.planName != "unknown" ? xai.planName : ""
-        // Keep the visible name literally "XAI" in all-caps black.
-        appendSimpleProviderSection(
-            title: "XAI",
-            titleColor: brandXaiColor,
-            subtitle: planInfo,
-            usedPercent: xai.primaryUsedPercent,
-            resetText: xai.timeUntilWeeklyReset,
-            error: viewModel.xaiError,
-            accentColor: brandXaiColor,
-            windowLabel: "7d"
-        )
-    }
-
-    /// Header + single "used% • reset" row shared by Cursor and Zai.
-    /// `mark` replaces the written title in the header when given;
-    /// `accentColor` (defaults to the title color) highlights high usage;
-    /// `windowLabel` prefixes the row (e.g. "M" for a monthly window).
-    private func appendSimpleProviderSection(
-        title: String,
-        mark: NSView? = nil,
-        titleColor: NSColor,
-        subtitle: String,
-        usedPercent: Int,
-        resetText: String,
-        error: String?,
-        accentColor: NSColor? = nil,
-        windowLabel: String = ""
-    ) {
-        menu.addItem(makeProviderHeader(
-            title,
-            parts: [mark ?? headerLabel(title, color: titleColor)],
-            subtitle: subtitle
-        ))
-
-        let valueColor = usageHighlightColor(
-            percentage: usedPercent,
-            highThreshold: 90,
-            accentColor: accentColor ?? titleColor,
-            fallback: NSColor.labelColor
-        )
-        let rowPrefix = windowLabel.isEmpty ? "  " : "  \(windowLabel): "
-        let row = NSMenuItem(title: "\(rowPrefix)\(usedPercent)%  \u{2022}  \(resetText)", action: nil, keyEquivalent: "")
-        row.isEnabled = false
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .regular)]
-        let rowString = NSMutableAttributedString(string: rowPrefix, attributes: attrs)
-        rowString.append(NSAttributedString(string: "\(usedPercent)", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: valueColor
-        ]))
-        rowString.append(NSAttributedString(string: "%  \u{2022}  \(resetText)", attributes: attrs))
-        row.attributedTitle = rowString
-        menu.addItem(row)
-
-        if let error {
-            menu.addItem(makeStatusMessageItem(error, color: .systemOrange))
-        }
-    }
-
-    private func makeStatusMessageItem(_ title: String, color: NSColor) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = NSAttributedString(string: "  \(title)", attributes: [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: color
-        ])
-        return item
     }
 
     private func getDarkMode() -> Bool {

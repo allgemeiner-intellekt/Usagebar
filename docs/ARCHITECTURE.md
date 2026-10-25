@@ -26,7 +26,8 @@ flowchart LR
 | Component | Responsibility |
 | --- | --- |
 | `JustaUsageBarApp` | SwiftUI entry point and settings scene. |
-| `AppDelegate` | Creates the `NSStatusItem`, menus, provider images, switching, focus following, and release checks. |
+| `AppDelegate` | Creates the `NSStatusItem`, the usage panel and settings menu, provider images, switching, focus following, and release checks. |
+| `UsagePanelView` | The panel a right click opens: one card per provider with its mark, plan, meters, and reset times. Clicking a card shows that provider in the menu bar; the ⋯ button opens the settings menu. |
 | `UsageViewModel` | UI state, cached credential availability, per-provider refresh scheduling, power-state handling, and launch at login. |
 | `ProviderActor` | Serializes provider and credential storage work away from the UI actor. |
 | `UsageRefreshPolicy` | Provider selection, refresh cadence, retry deadlines, and Retry-After parsing. |
@@ -50,7 +51,7 @@ flowchart LR
 5. Display or system sleep cancels pending requests and stops timers. Cancellation preserves credentials and previous readings. Wake refreshes only stale providers. Low Power Mode also pauses optional provider rotation.
 6. A provider re-enabled in Display refreshes immediately unless a server cooldown is still active. Manual Refresh bypasses local delay and rediscovers credentials.
 7. `AppDelegate` uses normalized usage and the credential snapshot to select a provider. It keeps at most one rendered image per provider, keyed by displayed values, appearance, backing scale, update badge, and display settings. Identical images are not reassigned.
-8. The menu is built when it opens, so reset countdowns and per-provider Last Updates labels are current without a UI timer. An open menu updates when usage or settings change.
+8. The usage panel and the settings menu are built when they open, so reset countdowns and per-provider Last Updates labels are current without a UI timer. An open menu updates when usage or settings change.
 
 UI state and drawing remain main-actor isolated. Provider services and encrypted credential storage share `ProviderActor`, a separate serial executor. Network awaits permit requests to overlap while keeping credential mutation serialized. No provider service is called by a drawing or provider-availability getter.
 

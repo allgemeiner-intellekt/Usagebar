@@ -81,7 +81,14 @@ struct UsagePanelView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Usagebar").fontWeight(.semibold)
+            HStack(spacing: 6) {
+                // The plain icon, without the tile macOS puts app icons on.
+                Image("PanelIcon")
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 20, height: 20)
+                Text("Usagebar").fontWeight(.semibold)
+            }
             Spacer()
             Text(model.updatedText)
                 .font(.system(size: 12))

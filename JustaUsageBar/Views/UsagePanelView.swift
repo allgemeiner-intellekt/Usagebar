@@ -82,7 +82,8 @@ struct UsagePanelView: View {
     private var header: some View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
-                Image(nsImage: NSApp.applicationIconImage)
+                // The plain icon, without the tile macOS puts app icons on.
+                Image("PanelIcon")
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 20, height: 20)

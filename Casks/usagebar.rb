@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 cask "usagebar" do
-  version "1.10.7"
-  sha256 "a59fb2768be0032971d5c03ba5dff2cca65959888702ef5b27174b53280d0476"
+  version "1.11.0"
+  sha256 "909f3db0fccf3cf68e1a806871cf725aabd2466ae656fb2ec594d8f8eb4752d8"
 
   url "https://github.com/betoxf/Usagebar/releases/download/v#{version}/Usagebar.zip"
   name "Usagebar"

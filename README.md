@@ -1,8 +1,8 @@
 <div align="center">
   <img src="assets/brand/usagebar-logo.png" alt="Usagebar" width="760">
 
-  <p><strong>Claude, Codex, KimiCode, and XAI usage limits, directly in your macOS menu bar.</strong></p>
-  <p>A private, native utility for checking rolling and weekly limits without breaking focus.</p>
+  <p><strong>Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok usage limits, directly in your macOS menu bar.</strong></p>
+  <p>A free, private, native Mac app that shows your 5-hour window, weekly cap, and when each one resets, without opening a browser.</p>
 
   <p>
     <a href="https://github.com/betoxf/Usagebar/actions/workflows/ci.yml"><img src="https://github.com/betoxf/Usagebar/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build"></a>
@@ -13,6 +13,7 @@
   </p>
 
   <p>
+    <a href="https://bullfighterstudio.com/usagebar">Website</a> ·
     <a href="#installation">Install</a> ·
     <a href="#how-it-works">How it works</a> ·
     <a href="CHANGELOG.md">Changelog</a> ·
@@ -23,20 +24,24 @@
 </div>
 
 <p align="center">
-  <img src="images/demo.gif" alt="Usagebar showing Claude and Codex limits in the macOS menu bar" width="760">
+  <img src="images/demo.gif" alt="Usagebar showing Claude and Codex usage limits in the macOS menu bar" width="760">
+</p>
+
+<p align="center">
+  <img src="images/panel.png" alt="Usagebar panel with Claude Code, Codex, Cursor, and z.ai usage limits, meters, and reset times" width="340">
 </p>
 
 ## Why Usagebar
 
-Usage limits matter most while you are working. Usagebar keeps the current five-hour window and weekly allowance visible in the menu bar, then gets out of the way.
+Usage limits matter most while you are working. Usagebar keeps your Claude Code, Codex, and Cursor limits (the current five-hour window and the weekly allowance) visible in the menu bar, then gets out of the way. Right-click it for a panel with every provider, a meter for each limit, and its reset time.
 
 | Capability | What it gives you |
 | --- | --- |
 | Multiple providers | Track Claude, Codex, KimiCode, Cursor, z.ai, and XAI (Grok Build) from one status item. |
 | At-a-glance limits | See rolling-window and weekly percentages without opening a browser. |
 | Focus-aware switching | Show the provider of the AI tool you used last: the Claude, ChatGPT/Codex, Cursor or Grok Bot, KimiCode, ZCode, or Grok app, or the Claude Code, Codex, Cursor, Kimi, or Grok CLI running in your terminal. |
-| Native controls | Refresh, change display mode, switch provider cadence, and launch at login. |
-| Local credential discovery | Reuse supported Claude CLI and Codex CLI sessions already present on the Mac. |
+| Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Click a card to show that provider in the menu bar. |
+| Local credential discovery | Reuse the Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok sign-ins already on the Mac. No API keys to paste. |
 | Privacy-first operation | No Usagebar account, telemetry, analytics, or intermediary backend. |
 | Lightweight runtime | A native Swift menu-bar app with no web runtime or bundled service. |
 
@@ -67,7 +72,7 @@ Download `Usagebar.zip` from the [latest release](https://github.com/betoxf/Usag
 
 1. Install and launch Usagebar.
 2. If you already use the provider CLIs, Usagebar discovers their local credentials automatically.
-3. Click the menu-bar item to refresh, choose display modes, or configure provider switching.
+3. Right-click the menu-bar item to open the usage panel. Left-click switches providers. Settings are under the panel's **⋯** button.
 
 If a provider is not detected, authenticate its CLI and ask Usagebar to rediscover credentials:
 
@@ -112,6 +117,8 @@ Bartender or Ice.)
 
 ## Menu-bar controls
 
+Right-click the status item to open the usage panel; its **⋯** button holds these settings.
+
 | Control | Behavior |
 | --- | --- |
 | Refresh (`⌘R`) | Rediscover credentials and fetch enabled providers, subject to server retry deadlines. |
@@ -120,6 +127,23 @@ Bartender or Ice.)
 | Switch cadence | Rotate providers automatically or switch manually with a left click. |
 | Launch at Login | Register or remove Usagebar as a macOS login item. |
 | Sign out | Reset the selected provider's Usagebar state; provider CLI sessions remain provider-owned. |
+
+## FAQ
+
+**How do I check my Claude Code usage limit on a Mac?**
+Install Usagebar and sign in to Claude Code as usual (`claude login`). The menu bar shows your five-hour window and weekly usage; the panel adds the Fable limit when your plan has one, and when each resets.
+
+**Can I see my Codex or ChatGPT rate limits?**
+Yes. Usagebar reads the Codex CLI sign-in (`codex login`) and shows the Codex primary and weekly windows with their reset times.
+
+**Does it work with Cursor and Grok Bot?**
+Yes. Cursor is picked up from the Cursor app's sign-in, and its weekly allowance is shared with Grok Bot, so the menu bar shows them together.
+
+**Is Usagebar free? Does it collect my data?**
+It's free and open source (MIT). There is no Usagebar account, no telemetry, and no server in between: usage travels directly between your Mac and each provider.
+
+**Is there a Windows or Linux version?**
+One is in development in [`desktop/`](https://github.com/betoxf/Usagebar/pull/28): the same panel in the system tray.
 
 ## How it works
 

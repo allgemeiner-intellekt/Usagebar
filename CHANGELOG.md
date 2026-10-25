@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.11.1](https://github.com/betoxf/Usagebar/releases/tag/v1.11.1) — 2026-10-25
+
+- Show the Usagebar icon beside the title of the usage panel.
+
 ## [1.11.0](https://github.com/betoxf/Usagebar/releases/tag/v1.11.0) — 2026-10-25
 
 - Open a usage panel from the menu bar instead of a menu: one card per provider with its mark, plan, usage meters and reset times, the same design as Usagebar for Windows. Click a card to show that provider in the menu bar.

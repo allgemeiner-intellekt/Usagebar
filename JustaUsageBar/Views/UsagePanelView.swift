@@ -33,7 +33,6 @@ struct UsagePanelCard: Identifiable {
 /// models and handles the actions.
 final class UsagePanelModel: ObservableObject {
     @Published var cards: [UsagePanelCard] = []
-    @Published var currentProvider: DisplayProvider?
     @Published var updatedText = ""
     @Published var updateVersion: String?
     @Published var isRefreshing = false
@@ -43,7 +42,6 @@ final class UsagePanelModel: ObservableObject {
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
 
-    var onSelect: (DisplayProvider) -> Void = { _ in }
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
     var onMore: (NSView) -> Void = { _ in }
@@ -66,7 +64,6 @@ struct UsagePanelView: View {
                     ForEach(model.cards) { card in
                         UsagePanelCardView(
                             card: card,
-                            isInMenuBar: card.provider == model.currentProvider,
                             model: model
                         )
                     }
@@ -125,11 +122,6 @@ struct UsagePanelView: View {
                 PanelTextButton(title: "Update to v\(version)", color: Color(nsColor: .usagebarClaudeOrange)) {
                     model.onUpdate()
                 }
-            } else {
-                Text(model.needsSetup ? "" : "Click a provider to show it in the bar")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
             Spacer(minLength: 0)
             MoreButton(model: model)
@@ -142,10 +134,8 @@ struct UsagePanelView: View {
 
 private struct UsagePanelCardView: View {
     let card: UsagePanelCard
-    let isInMenuBar: Bool
     @ObservedObject var model: UsagePanelModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -158,10 +148,6 @@ private struct UsagePanelCardView: View {
                         .padding(.leading, 2)
                 }
                 Spacer(minLength: 4)
-                Circle()
-                    .strokeBorder(isInMenuBar ? Color.primary : Color.secondary, lineWidth: 1.5)
-                    .background(Circle().fill(isInMenuBar ? Color.primary : Color.clear))
-                    .frame(width: 8, height: 8)
             }
             .frame(height: 18)
 
@@ -206,10 +192,6 @@ private struct UsagePanelCardView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(stroke, lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .onHover { hovering = $0 }
-        .onTapGesture { model.onSelect(card.provider) }
-        .help(isInMenuBar ? "Shown in the menu bar" : "Show in the menu bar")
     }
 
     @ViewBuilder private var mark: some View {
@@ -257,12 +239,7 @@ private struct UsagePanelCardView: View {
     }
 
     private var cardFill: Color {
-        switch (colorScheme, hovering) {
-        case (.dark, false): Color.white.opacity(0.05)
-        case (.dark, true): Color.white.opacity(0.09)
-        case (_, false): Color.white.opacity(0.66)
-        case (_, true): Color.white.opacity(0.92)
-        }
+        colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.66)
     }
 
     private var stroke: Color {

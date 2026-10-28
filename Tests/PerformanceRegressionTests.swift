@@ -3,7 +3,6 @@ import Foundation
 @main
 struct PerformanceRegressionTests {
     @MainActor static func main() async throws {
-        TerminalStandIn.runIfRequested()
         guard Bundle.main.bundleIdentifier == "dev.usagebar.performance-tests" else {
             fatalError("Tests require their isolated preferences domain")
         }
@@ -14,11 +13,10 @@ struct PerformanceRegressionTests {
         testRetryAfter()
         testTimerLifetime()
         try await testViewModel()
-        testTerminalCommands()
-        try await testTerminalSessionScan()
+        try await testPanelRefresh()
         await testProviderHTTP()
         try testKeychainTool()
-        print("PASS: refresh policy, retry headers, timer lifetime, refresh orchestration, terminal sessions, request sessions, and keychain reads")
+        print("PASS: refresh policy, retry headers, timer lifetime, refresh orchestration, panel freshness, request sessions, and keychain reads")
     }
 
     static func check(_ condition: Bool, _ message: String) {
@@ -32,10 +30,10 @@ struct PerformanceRegressionTests {
         check(UsageRefreshPolicy.interval(base: 600, lowPower: true) == 600, "Respect slower user cadence")
         check(UsageRefreshPolicy.interval(base: 120, visible: true) == 120, "Visible reading slowed down")
         check(UsageRefreshPolicy.interval(base: 120, visible: false) == 600, "Hidden reading kept the visible cadence")
-        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: [.codex], fallback: .claude) == [.codex], "Hidden provider selected")
-        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: [], fallback: .codex) == [.codex], "Lost displayed fallback")
-        check(UsageRefreshPolicy.targets(available: [.codex], enabled: [], fallback: .claude) == [.codex], "No available fallback")
-        check(UsageRefreshPolicy.targets(available: [], enabled: [.claude], fallback: .claude).isEmpty, "Invented credentials")
+        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: [.codex]) == [.codex], "Hidden provider selected")
+        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: []) == [.claude], "Lost authenticated fallback")
+        check(UsageRefreshPolicy.targets(available: [.codex], enabled: []) == [.codex], "No available fallback")
+        check(UsageRefreshPolicy.targets(available: [], enabled: [.claude]).isEmpty, "Invented credentials")
         var state = ProviderRefreshState()
         check(state.isDue(at: now, interval: 120, manual: false), "Initial data must fetch")
         state.lastAttempt = now
@@ -165,82 +163,60 @@ struct PerformanceRegressionTests {
         try await eventually { !model.isLoading && model.codexUsageData.testValue > previousCodexValue }
         let overlaps = await FakeProviders.overlappingProviderRequests
         check(overlaps == 0, "A provider had overlapping requests")
-        model.rotationChanged(isRotating: true)
-        check(model.refreshInterval(for: .codex) == 120, "Rotating providers must all stay fresh")
-        model.rotationChanged(isRotating: false)
-        model.displayedProviderChanged(.claude)
-        check(model.refreshInterval(for: .claude) == 120, "Displayed provider slowed down")
-        check(model.refreshInterval(for: .codex) == 600, "Hidden provider kept the visible cadence")
+        check(model.scheduledRefreshInterval == 600, "Closed panel kept the on-screen cadence")
         counts = await FakeProviders.counts
-        let countsBeforeSwitch = counts
-        model.displayedProviderChanged(.codex)
-        check(model.refreshInterval(for: .codex) == 120, "Newly displayed provider kept the hidden cadence")
-        model.menuVisibilityChanged(isOpen: true)
-        check(model.refreshInterval(for: .claude) == 120, "Open menu showed a hidden cadence")
-        model.menuVisibilityChanged(isOpen: false)
+        let countsBeforeOpen = counts
+        model.usageVisibilityChanged(isVisible: true)
+        check(model.scheduledRefreshInterval == 120, "Open panel kept the hidden cadence")
+        model.usageVisibilityChanged(isVisible: false)
         try await Task.sleep(nanoseconds: 50_000_000)
         counts = await FakeProviders.counts
-        check(counts == countsBeforeSwitch, "Showing fresh readings refetched them")
-        model.displayedProviderChanged(.claude)
+        check(counts == countsBeforeOpen, "Showing fresh readings refetched them")
         model.showClaude = false
         model.showCodex = false
         model.showKimi = false
         check(model.refreshTargets == [.claude], "All-hidden fallback disappeared")
     }
 
-    static func testTerminalCommands() {
-        let zai = "https://api.z.ai/api/anthropic"
-        let cases: [(executable: String, arguments: [String], baseURL: String?, expected: DisplayProvider?)] = [
-            ("/Users/a/.local/share/claude/versions/2.1.286", ["claude"], nil, .claude),
-            ("/Users/a/.local/share/claude/versions/2.1.286", ["claude"], "https://api.anthropic.com", .claude),
-            ("/Users/a/.cc-mirror/zai/native/claude", ["/Users/a/.cc-mirror/zai/native/claude"], zai, .zai),
-            ("/opt/homebrew/bin/node", ["node", "/opt/homebrew/bin/claude"], "https://api.kimi.com/coding/", .kimi),
-            ("/Users/a/.local/bin/claude", ["claude"], "https://openrouter.ai/api", nil),
-            ("/Users/a/.local/bin/claude", ["claude"], "https://api.notz.ai/anthropic", nil),
-            ("/opt/homebrew/bin/node", ["node", "/Users/a/.local/bin/codex"], zai, .codex),
-            ("/Users/a/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex", ["codex"], nil, .codex),
-            ("/Users/a/.local/share/cursor-agent/versions/2026.09.18/node",
-             ["/Users/a/.local/bin/agent", "--use-system-ca", "/Users/a/.local/share/cursor-agent/versions/2026.09.18/index.js"],
-             nil, .cursor),
-            ("/Users/a/.kimi-code/bin/kimi", ["kimi"], nil, .kimi),
-            ("/usr/bin/python3", ["python3.13", "/Users/a/.local/bin/kimi-cli"], nil, .kimi),
-            ("/Users/a/.grok/bin/grok", ["grok"], nil, .xai),
-            ("/bin/zsh", ["-zsh"], zai, nil),
-            ("/usr/bin/vim", ["vim", "codex"], nil, nil),
-            ("/opt/homebrew/bin/node", ["node", "/Users/a/code/server.js"], nil, nil)
-        ]
-        for item in cases {
-            let provider = TerminalAgentDetector.provider(
-                executable: item.executable, arguments: item.arguments, baseURL: item.baseURL
-            )
-            check(provider == item.expected, "Misread terminal command: \(item.arguments.joined(separator: " "))")
-        }
-    }
-
-    /// Runs a stand-in CLI on a real pseudo-terminal, then reads it back from the process table.
-    static func testTerminalSessionScan() async throws {
-        let app = getpid()
-        check(TerminalAgentDetector.isApplication(app) && !TerminalAgentDetector.isApplication(1),
-              "Cannot tell an application from a system process")
-        check(!TerminalAgentDetector.scan(app: app, isTerminal: false).hostsTerminals,
-              "Found a terminal session before one started")
-
-        guard let cli = TerminalStandIn(named: "claude", environment: ["ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic"])
-        else { fatalError("No pseudo-terminal available") }
-        defer { cli.stop() }
-
-        var scan = TerminalAgentDetector.scan(app: app, isTerminal: false)
-        for _ in 0..<200 where scan.provider != .zai {
-            cli.type()
-            try await Task.sleep(nanoseconds: 10_000_000)
-            scan = TerminalAgentDetector.scan(app: app, isTerminal: false)
-        }
-        check(scan.provider == .zai && scan.hostsTerminals, "Missed the CLI running in this app's terminal session")
-        // To any other terminal, the session belongs to this test application.
-        cli.type()
-        try await Task.sleep(nanoseconds: 10_000_000)
-        let foreign = TerminalAgentDetector.scan(app: 1, isTerminal: true)
-        check(foreign.provider != .zai && foreign.hostsTerminals, "Claimed another application's terminal session")
+    /// Drive the real visibility/scheduler path with old cache entries and fake providers.
+    @MainActor static func testPanelRefresh() async throws {
+        await FakeProviders.reset()
+        let model = UsageViewModel(startAutomatically: false)
+        defer { model.stopAutoRefresh() }
+        model.showClaude = true
+        model.showCodex = true
+        model.showKimi = false
+        model.showCursor = false
+        model.showZai = false
+        model.showXai = false
+        await model.refresh()
+        model.ageReadings(by: 180)
+        // Three-minute-old data is still fresh enough for a closed panel.
+        model.providerSettingsChanged()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        var counts = await FakeProviders.counts
+        check(counts[.claude] == 1 && counts[.codex] == 1, "Closed panel polled at the on-screen rate")
+        model.usageVisibilityChanged(isVisible: true)
+        try await eventually { await FakeProviders.counts[.codex] == 2 && !model.isLoading }
+        counts = await FakeProviders.counts
+        check(counts[.claude] == 2, "Opening the panel left stale data")
+        model.usageVisibilityChanged(isVisible: false)
+        model.usageVisibilityChanged(isVisible: true)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let countsAfterReopen = await FakeProviders.counts
+        check(countsAfterReopen == counts, "Reopening fresh data made duplicate requests")
+        model.usageVisibilityChanged(isVisible: false)
+        model.ageReadings(by: 180)
+        model.coolDown(.claude, until: Date().addingTimeInterval(300))
+        model.usageVisibilityChanged(isVisible: true)
+        try await eventually { await FakeProviders.counts[.codex] == 3 && !model.isLoading }
+        counts = await FakeProviders.counts
+        check(counts[.claude] == 2, "Opening the panel bypassed server cooldown")
+        model.usageVisibilityChanged(isVisible: false)
+        model.powerModeChanged(lowPower: true)
+        check(model.scheduledRefreshInterval == 1500, "Closed panel ignored Low Power Mode")
+        model.usageVisibilityChanged(isVisible: true)
+        check(model.scheduledRefreshInterval == 300, "Open panel ignored Low Power Mode")
     }
 
     /// A keychain dialog must never hold up the caller, be stacked, or be raised again after a refusal.
@@ -301,5 +277,19 @@ struct PerformanceRegressionTests {
                 }
             }
         }
+    }
+}
+
+extension UsageViewModel {
+    fileprivate func ageReadings(by age: TimeInterval) {
+        for provider in refreshTargets {
+            refreshStates[provider]?.lastAttempt = Date().addingTimeInterval(-age)
+            refreshStates[provider]?.lastSuccess = Date().addingTimeInterval(-age)
+        }
+    }
+
+    fileprivate func coolDown(_ provider: DisplayProvider, until date: Date) {
+        refreshStates[provider]?.serverRetryAt = date
+        refreshStates[provider]?.retryAt = date
     }
 }

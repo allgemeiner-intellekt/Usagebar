@@ -18,3 +18,7 @@ The approved Usagebar identity is stored in `assets/brand`.
 - Inspect the 16px and 32px files after any change.
 
 The symbol represents a compact usage window with a local loading indicator. It is provider-neutral and should not be combined with Anthropic or OpenAI trademarks.
+
+## Personal menu-bar symbol
+
+The personal fork uses the built-in `chart.bar` system symbol as a monochrome template in a standard square status item. It is independent of the app icon and the original brand masters, which remain unchanged. Future personal renaming and app-icon work is separate from this menu-bar change.

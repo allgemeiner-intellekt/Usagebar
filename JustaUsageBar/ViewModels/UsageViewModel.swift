@@ -53,17 +53,12 @@ final class UsageViewModel: ObservableObject {
 
     // MARK: - Display Settings (persisted)
 
-    @AppStorage("showIcon") var showIcon: Bool = true
-    @AppStorage("showOnly5hr") var showOnly5hr: Bool = false
-    @AppStorage("showOnlyWeekly") var showOnlyWeekly: Bool = false
     @AppStorage("showClaude") var showClaude: Bool = true
     @AppStorage("showCodex") var showCodex: Bool = true
     @AppStorage("showCursor") var showCursor: Bool = true
     @AppStorage("showZai") var showZai: Bool = true
     @AppStorage("showXai") var showXai: Bool = true
     @AppStorage("showKimi") var showKimi: Bool = true
-    @AppStorage("animationInterval") var animationInterval: Double = 8.0
-    @AppStorage("followActiveApp") var followActiveApp: Bool = true
     @AppStorage("autoUpdate") var autoUpdate: Bool = true
 
     // Launch at login using SMAppService (macOS 13+)
@@ -108,18 +103,12 @@ final class UsageViewModel: ObservableObject {
     private var systemAsleep = false
     private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     private var knownTargets: Set<DisplayProvider> = []
-    private var displayedProvider: DisplayProvider = .claude
-    private var isMenuOpen = false
-    private var isRotating = false
+    private var isUsageVisible = false
     private var lastCredentialCheck: Date?
 
     @AppStorage("hasLaunchedBefore") private var hasLaunchedBefore = false
 
     init(startAutomatically: Bool = true) {
-        if let raw = UserDefaults.standard.string(forKey: "preferredDisplayProvider"),
-           let provider = DisplayProvider(rawValue: raw) {
-            displayedProvider = provider
-        }
         guard startAutomatically else { return }
         observePowerState()
         Task { await requestRefresh() }
@@ -133,12 +122,9 @@ final class UsageViewModel: ObservableObject {
         UsageRefreshPolicy.interval(base: refreshInterval, lowPower: lowPowerMode)
     }
 
-    /// The menu bar shows one provider unless it rotates; the open menu shows all.
-    func refreshInterval(for provider: DisplayProvider) -> TimeInterval {
-        UsageRefreshPolicy.interval(
-            base: effectiveRefreshInterval,
-            visible: isMenuOpen || isRotating || provider == displayedProvider
-        )
+    /// Only the panel and its settings menu show usage; the status icon is fixed.
+    var scheduledRefreshInterval: TimeInterval {
+        UsageRefreshPolicy.interval(base: effectiveRefreshInterval, visible: isUsageVisible)
     }
 
     private var enabledProviders: Set<DisplayProvider> {
@@ -155,7 +141,7 @@ final class UsageViewModel: ObservableObject {
     }
 
     var refreshTargets: Set<DisplayProvider> {
-        UsageRefreshPolicy.targets(available: availableProviders, enabled: enabledProviders, fallback: displayedProvider)
+        UsageRefreshPolicy.targets(available: availableProviders, enabled: enabledProviders)
     }
 
     // UI availability checks are memory-only. Services own discovery and its caches.
@@ -167,26 +153,9 @@ final class UsageViewModel: ObservableObject {
     var hasXaiCredentials: Bool { availableProviders.contains(.xai) }
     var hasKimiCredentials: Bool { availableProviders.contains(.kimi) }
 
-    var shouldAnimateProviders: Bool {
-        !isBackgroundSuspended && !lowPowerMode &&
-            availableProviders.intersection(enabledProviders).count >= 2 && animationInterval > 0
-    }
-
-    func displayedProviderChanged(_ provider: DisplayProvider) {
-        guard provider != displayedProvider else { return }
-        displayedProvider = provider
-        providerSettingsChanged()
-    }
-
-    func menuVisibilityChanged(isOpen: Bool) {
-        guard isOpen != isMenuOpen else { return }
-        isMenuOpen = isOpen
-        providerSettingsChanged()
-    }
-
-    func rotationChanged(isRotating: Bool) {
-        guard isRotating != self.isRotating else { return }
-        self.isRotating = isRotating
+    func usageVisibilityChanged(isVisible: Bool) {
+        guard isVisible != isUsageVisible else { return }
+        isUsageVisible = isVisible
         providerSettingsChanged()
     }
 
@@ -202,7 +171,7 @@ final class UsageViewModel: ObservableObject {
         // A reading that just became visible may be older than its new cadence allows.
         let now = Date()
         let stale = targets.contains {
-            refreshStates[$0, default: .init()].isDue(at: now, interval: refreshInterval(for: $0), manual: false)
+            refreshStates[$0, default: .init()].isDue(at: now, interval: scheduledRefreshInterval, manual: false)
         }
         if !added.isEmpty || stale {
             Task { await requestRefresh() }
@@ -289,6 +258,7 @@ final class UsageViewModel: ObservableObject {
 
     private func performRefresh(manual: Bool, rediscover: Bool) async {
         isLoading = true
+        NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
         defer {
             isLoading = false
             NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
@@ -301,7 +271,7 @@ final class UsageViewModel: ObservableObject {
         guard !Task.isCancelled, !isBackgroundSuspended else { return }
         let now = Date()
         let due = refreshTargets.filter {
-            refreshStates[$0, default: .init()].isDue(at: now, interval: refreshInterval(for: $0), manual: manual)
+            refreshStates[$0, default: .init()].isDue(at: now, interval: scheduledRefreshInterval, manual: manual)
         }
         for provider in due { refreshStates[provider, default: .init()].lastAttempt = now }
         await withTaskGroup(of: Void.self) { group in
@@ -381,7 +351,7 @@ final class UsageViewModel: ObservableObject {
         timer?.invalidate()
         timer = nil
         guard autoRefreshEnabled, !isBackgroundSuspended, refreshTask == nil else { return }
-        guard let next = refreshTargets.map({ refreshStates[$0, default: .init()].nextRefresh(interval: refreshInterval(for: $0)) }).min()
+        guard let next = refreshTargets.map({ refreshStates[$0, default: .init()].nextRefresh(interval: scheduledRefreshInterval) }).min()
         else { return }
         let delay = max(1, next.timeIntervalSinceNow)
         timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -462,7 +432,6 @@ final class UsageViewModel: ObservableObject {
         } else {
             scheduleNextRefresh()
         }
-        NotificationCenter.default.post(name: NSNotification.Name("BackgroundActivityChanged"), object: nil)
     }
 
     func freshnessText(for provider: DisplayProvider, now: Date = Date()) -> String {

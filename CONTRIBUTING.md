@@ -27,7 +27,7 @@ The script stops an existing Usagebar process, builds a Debug app into `build/Co
 
 Use `make build` for a compile-only build.
 
-Run `./script/test_performance.sh` for deterministic scheduling, cancellation, credential-snapshot, timer-lifetime, menu, and image-cache regression tests. Scheduling tests use fake providers; rendering tests compile the real AppKit renderers with fixture state. Both use an isolated preferences domain and never read provider credentials or contact provider APIs. Set `USAGEBAR_RENDER_OUTPUT=/absolute/path/preview.png` to save light/dark rendering previews.
+Run `./script/test_performance.sh` for deterministic scheduling, cancellation, credential-snapshot, timer-lifetime, panel interaction, fixed-icon, and visibility-driven refresh regression tests. Scheduling tests use fake providers; rendering tests compile the real AppKit renderers with fixture state. Both use an isolated preferences domain and never read provider credentials or contact provider APIs. Set `USAGEBAR_RENDER_OUTPUT=/absolute/path/preview.png` to save light/dark rendering previews.
 
 For local performance measurements, use a Release build:
 

@@ -32,19 +32,20 @@
   <img src="images/panel.png" alt="Usagebar panel with Claude Code, Codex, Cursor, and z.ai usage limits, meters, and reset times" width="340">
 </p>
 
+The images above show the upstream interface. This personal fork uses a fixed menu-bar icon and removes provider selection from the cards.
+
 ## Why Usagebar
 
-Usage limits matter most while you are working. Usagebar keeps your Claude Code, Codex, and Cursor limits (the current five-hour window and the weekly allowance) visible in the menu bar, then gets out of the way. Right-click it for a panel with every provider, a meter for each limit, and its reset time.
+Usage limits matter most while you are working. Usagebar puts your Claude Code, Codex, and Cursor limits behind one fixed menu-bar icon. Click it once for a panel with every provider, a meter for each limit, and its reset time. Click again, click outside, or press Escape to close it.
 
 | Capability | What it gives you |
 | --- | --- |
 | Multiple providers | Track Claude, Codex, KimiCode, Cursor, z.ai, and XAI (Grok Build) from one status item. |
-| At-a-glance limits | See rolling-window and weekly percentages without opening a browser. |
-| Focus-aware switching | Show the provider of the AI tool you used last: the Claude, ChatGPT/Codex, Cursor or Grok Bot, KimiCode, ZCode, or Grok app, or the Claude Code, Codex, Cursor, Kimi, or Grok CLI running in your terminal. |
-| Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Click a card to show that provider in the menu bar. |
+| Fixed menu-bar icon | A compact monochrome chart symbol opens the panel with either a left or right click. |
+| Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Provider visibility switches are under the panel's **⋯** button. |
 | Local credential discovery | Reuse the Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok sign-ins already on the Mac. No API keys to paste. |
 | Privacy-first operation | No Usagebar account, telemetry, analytics, or intermediary backend. |
-| Lightweight runtime | A native Swift menu-bar app with no web runtime or bundled service. |
+| Lightweight runtime | A native Swift menu-bar app with no web runtime or bundled service. Background refresh slows while the panel is closed. |
 
 ## Installation
 
@@ -66,7 +67,7 @@ The app's download action opens this fork's builds. It does not install Homebrew
 
 1. Install and launch Usagebar.
 2. If you already use the provider CLIs, Usagebar discovers their local credentials automatically.
-3. Right-click the menu-bar item to open the usage panel. Left-click switches providers. Settings are under the panel's **⋯** button.
+3. Click the fixed menu-bar icon to open the usage panel. Settings are under the panel's **⋯** button. The panel shows cached readings immediately and refreshes stale data when opened.
 
 If a provider is not detected, authenticate its CLI and ask Usagebar to rediscover credentials:
 
@@ -158,7 +159,6 @@ Credential discovery runs off the UI thread. Menu-bar rendering uses cached avai
 - Usage data travels directly between your Mac and the selected provider.
 - Usagebar does not operate a backend and does not collect telemetry or analytics.
 - CLI credential files are read locally and are never copied to a Usagebar service.
-- To follow a CLI in your terminal, Usagebar reads the command line and Anthropic gateway setting of the foreground command in your terminal sessions. It keeps none of it and needs no Accessibility, Automation, or Screen Recording access.
 - Claude browser-session credentials saved by the app are encrypted locally with AES-256-GCM using a device-derived key.
 - Provider APIs and authentication formats can change independently of Usagebar.
 

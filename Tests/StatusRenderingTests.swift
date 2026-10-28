@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 // The runner joins this file with the two controllers so these test extensions can
 // inspect private state without adding test-only accessors to the shipped app.
@@ -16,20 +17,28 @@ extension AppDelegate {
     fileprivate func verifyRendering(output: URL?) throws {
         setupStatusItem()
         setupMenu()
-        defer { NSStatusBar.system.removeStatusItem(statusItem) }
+        defer {
+            panel.close()
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
         viewModel.stopAutoRefresh()
-        viewModel.followActiveApp = false
         viewModel.showClaude = true
         viewModel.showCodex = true
         viewModel.showCursor = false
         viewModel.showKimi = false
         viewModel.showZai = false
         viewModel.showXai = false
-        viewModel.showIcon = true
-        viewModel.showOnly5hr = false
-        viewModel.showOnlyWeekly = false
         viewModel.usageData = UsageData(fiveHourUsed: 23, weeklyUsed: 67)
         viewModel.codexUsageData = CodexUsageData(primaryUsedPercent: 34, secondaryUsedPercent: 72)
+
+        let button = statusItem.button!
+        let icon = button.image!
+        precondition(icon.isTemplate, "Status icon must follow the menu bar appearance")
+        precondition(statusItem.length == NSStatusItem.squareLength, "Status item must use a standard square slot")
+        precondition(button.imagePosition == .imageOnly && button.title.isEmpty, "Status item contains usage text")
+        precondition(button.accessibilityLabel() == "Usagebar", "Status icon lost its accessible name")
+        let clickMask = NSEvent.EventTypeMask(rawValue: UInt(button.sendAction(on: [.leftMouseUp, .rightMouseUp])))
+        precondition(clickMask.contains(.leftMouseUp) && clickMask.contains(.rightMouseUp), "Both clicks must open the panel")
 
         for providers: Set<DisplayProvider> in [[], [.claude], [.codex], [.claude, .codex]] {
             viewModel.useRenderingFixtures(providers)
@@ -40,90 +49,98 @@ extension AppDelegate {
                 precondition(menu.items.contains { $0.title == "Refresh" })
                 let updates = menu.items.first { $0.title == "Last Updates" }?.submenu
                 precondition(updates?.numberOfItems == providers.count)
+                let display = menu.items.first { $0.title == "Display" }!.submenu!
+                precondition(display.numberOfItems == providers.count, "Display must contain only provider switches")
+                precondition(display.items.allSatisfy { $0.title == "Show Claude" || $0.title == "Show Codex" })
+                precondition(!menu.items.contains { $0.title == "Show Icon" }, "Fixed icon can still be hidden")
             }
             menuDidClose(menu)
             let firstItem = menu.items.first
             rebuildMenu()
             precondition(menu.items.first === firstItem, "Closed menu rebuilt")
+
+            // Exercise the real button target/action, including setup and multi-provider states.
+            button.performClick(nil)
+            precondition(isPanelOpen && panel.isVisible, "Single click did not open the panel")
+            precondition(panelModel.needsSetup == providers.isEmpty, "Panel setup state is incorrect")
+            precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval)
+            precondition(panelModel.cards.map(\.provider) == [.claude, .codex], "Provider card order changed")
+            button.performClick(nil)
+            precondition(!isPanelOpen && !panel.isVisible, "Second click did not close the panel")
+            precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5)
+            precondition(button.image === icon, "Provider availability changed the fixed icon")
         }
 
         viewModel.useRenderingFixtures([.claude, .codex])
-        let sheet = NSImage(size: NSSize(width: 560, height: 240))
-        for (row, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
-            statusItem.button?.appearance = NSAppearance(named: appearance)
-            currentProvider = .claude
-            updateStatusImage()
-            let first = statusItem.button!.image!
-            updateStatusImage()
-            precondition(statusItem.button?.image === first, "Unchanged status image rebuilt")
-            currentProvider = .codex
-            updateStatusImage()
-            currentProvider = .claude
-            updateStatusImage()
-            precondition(statusItem.button?.image === first, "Provider cache missed on return")
-            viewModel.usageData.fiveHourUsed += 1
-            updateStatusImage()
-            precondition(statusItem.button?.image !== first, "Changed usage kept the old image")
+        // Closing the settings menu must keep the visible panel at the on-screen cadence.
+        button.performClick(nil)
+        menuWillOpen(menu)
+        menuDidClose(menu)
+        precondition(isPanelOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval)
+        panel.close()
+        precondition(!isPanelOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5)
 
-            let light = row == 0
-            var previews: [NSImage] = []
-            for provider in DisplayProvider.displayOrder {
-                let (image, width) = createProviderImage(for: provider)
-                precondition(width > 0 && image.size.width == width && image.size.height > 0)
-                previews.append(image)
-            }
+        viewModel.usageData.fiveHourUsed = 99
+        viewModel.codexUsageData.primaryUsedPercent = 100
+        availableUpdateVersion = "99.0"
+        usageDataChanged()
+        precondition(button.image === icon && statusItem.length == NSStatusItem.squareLength,
+                     "Usage, errors, or updates changed the fixed icon")
+        availableUpdateVersion = nil
+        viewModel.usageData.fiveHourUsed = 23
+        viewModel.codexUsageData.primaryUsedPercent = 34
+
+        // Keep the last authenticated provider enabled when using the Display switches.
+        toggleShowClaude()
+        precondition(!viewModel.showClaude && viewModel.showCodex)
+        toggleShowCodex()
+        precondition(viewModel.showCodex, "Display switches hid every authenticated provider")
+        viewModel.showClaude = true
+
+        guard let output else { return }
+        let sheet = NSImage(size: NSSize(width: 720, height: 460))
+        for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
+            let dark = column == 1
+            let theme = NSAppearance(named: appearance)!
+            button.appearance = theme
+            precondition(button.image === icon, "Appearance change rebuilt the fixed icon")
+            isPanelOpen = true
+            updatePanel()
+            let hosting = NSHostingView(rootView: UsagePanelView(model: panelModel)
+                .environment(\.colorScheme, dark ? .dark : .light))
+            hosting.appearance = theme
+            hosting.setFrameSize(hosting.fittingSize)
+            hosting.layoutSubtreeIfNeeded()
+            let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)!
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            let panelImage = NSImage(size: hosting.bounds.size)
+            panelImage.addRepresentation(bitmap)
+
+            let iconView = NSImageView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+            iconView.appearance = theme
+            iconView.image = icon
+            iconView.contentTintColor = dark ? .white : .black
+            let iconBitmap = iconView.bitmapImageRepForCachingDisplay(in: iconView.bounds)!
+            iconView.cacheDisplay(in: iconView.bounds, to: iconBitmap)
+            let iconImage = NSImage(size: iconView.bounds.size)
+            iconImage.addRepresentation(iconBitmap)
+
             sheet.lockFocus()
-            (light ? NSColor.white : NSColor(white: 0.12, alpha: 1)).setFill()
-            NSRect(x: 0, y: row * 120, width: 560, height: 120).fill()
+            (dark ? NSColor(white: 0.12, alpha: 1) : .white).setFill()
+            NSRect(x: column * 360, y: 0, width: 360, height: 460).fill()
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 12),
-                .foregroundColor: light ? NSColor.black : NSColor.white
+                .foregroundColor: dark ? NSColor.white : NSColor.black
             ]
-            NSAttributedString(string: light ? "Light appearance" : "Dark appearance", attributes: attrs)
-                .draw(at: NSPoint(x: 12, y: row * 120 + 90))
-            for (column, image) in previews.enumerated() {
-                image.draw(at: NSPoint(x: 12 + column * 90, y: row * 120 + 40), from: .zero, operation: .sourceOver, fraction: 1)
-            }
+            NSAttributedString(string: dark ? "Dark appearance" : "Light appearance", attributes: attrs)
+                .draw(at: NSPoint(x: column * 360 + 44, y: 420))
+            iconImage.draw(at: NSPoint(x: column * 360 + 12, y: 414), from: .zero, operation: .sourceOver, fraction: 1)
+            panelImage.draw(at: NSPoint(x: column * 360 + 10, y: 405 - panelImage.size.height), from: .zero, operation: .sourceOver, fraction: 1)
             sheet.unlockFocus()
         }
-        currentProvider = .codex
-        viewModel.codexUsageData.primaryWindowSeconds = 7 * 24 * 3600
-        updateStatusImage()
-        precondition(statusItem.button?.image?.size.width == 50, "Weekly Codex window duplicated")
-
-        // Follow Active App keeps the last AI tool on screen instead of the saved pick.
-        viewModel.followActiveApp = true
-        viewModel.animationInterval = 0
-        preferredProvider = .codex
-        setFocus(.claude)
-        precondition(currentProvider == .claude, "AI app in front was not shown")
-        follow(.current)
-        precondition(focusProvider == nil && currentProvider == .claude, "Leaving an AI app changed the provider")
-
-        // A CLI in the frontmost app's terminal is followed, here in this test's own.
-        guard let cli = TerminalStandIn(named: "codex") else { preconditionFailure("No pseudo-terminal available") }
-        defer { cli.stop() }
-        for _ in 0..<200 where TerminalAgentDetector.scan(app: getpid(), isTerminal: false).provider != .codex {
-            cli.type()
-            usleep(10_000)
-        }
-        follow(.current)
-        for _ in 0..<100 where focusProvider != .codex {
-            cli.type()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        precondition(focusProvider == .codex && currentProvider == .codex, "Terminal CLI was not followed")
-        currentProvider = .claude
-        resumeTerminalWatch()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        precondition(currentProvider == .claude, "Resuming the watch overrode a manual pick")
-        terminalSessionChanged(to: nil)
-        precondition(focusProvider == nil && currentProvider == .claude, "A CLI that ended moved the provider")
-        viewModel.followActiveApp = false
-        follow(.current)
-        precondition(terminalWatch == nil, "Watching continued with Follow Active App off")
-        if let output, let tiff = sheet.tiffRepresentation,
+        if let tiff = sheet.tiffRepresentation,
            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try png.write(to: output)
         }
     }
@@ -132,18 +149,16 @@ extension AppDelegate {
 @main
 struct StatusRenderingTests {
     @MainActor static func main() throws {
-        TerminalStandIn.runIfRequested()
         guard Bundle.main.bundleIdentifier == "dev.usagebar.performance-tests" else {
             fatalError("Tests require their isolated preferences domain")
         }
-        // A run that trapped leaves its preferences behind.
         UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests")
         defer { UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests") }
         _ = NSApplication.shared
-        NSApp.setActivationPolicy(.prohibited)
+        NSApp.setActivationPolicy(.accessory)
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
         try AppDelegate(viewModel: model).verifyRendering(output: output)
-        print("PASS: setup/Claude/Codex menus, closed-menu reuse, status image caching, light/dark rendering, focus following")
+        print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, provider switches, closed-menu reuse, visibility cadence")
     }
 }

@@ -16,27 +16,6 @@ struct PopoverView: View {
     // Anthropic orange
     private let anthropicOrange = Color(red: 0.83, green: 0.53, blue: 0.30)
 
-    // Display mode label
-    private var displayModeLabel: String {
-        if viewModel.showOnly5hr { return "5h" }
-        if viewModel.showOnlyWeekly { return "W" }
-        return "Both"
-    }
-
-    private func cycleDisplayMode() {
-        if !viewModel.showOnly5hr && !viewModel.showOnlyWeekly {
-            viewModel.showOnly5hr = true
-            viewModel.showOnlyWeekly = false
-        } else if viewModel.showOnly5hr {
-            viewModel.showOnly5hr = false
-            viewModel.showOnlyWeekly = true
-        } else {
-            viewModel.showOnly5hr = false
-            viewModel.showOnlyWeekly = false
-        }
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
     private func openBrowser() {
         if let url = URL(string: "https://claude.ai/settings/usage") {
             NSWorkspace.shared.open(url)
@@ -208,32 +187,6 @@ struct PopoverView: View {
                 Text("Start")
                     .font(.system(size: 7))
                     .foregroundColor(.secondary)
-
-                // Icon toggle
-                Toggle("", isOn: Binding(
-                    get: { viewModel.showIcon },
-                    set: {
-                        viewModel.showIcon = $0
-                        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-                    }
-                ))
-                    .labelsHidden()
-                    .scaleEffect(0.6)
-                    .tint(anthropicOrange)
-                Text("Icon")
-                    .font(.system(size: 7))
-                    .foregroundColor(.secondary)
-
-                // Display mode
-                Button(action: cycleDisplayMode) {
-                    Text(displayModeLabel)
-                        .font(.system(size: 7, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(anthropicOrange))
-                }
-                .buttonStyle(.plain)
             }
         }
     }

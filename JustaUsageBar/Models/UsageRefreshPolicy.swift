@@ -44,12 +44,11 @@ nonisolated enum UsageRefreshPolicy {
     }
 
     static func targets(
-        available: Set<DisplayProvider>, enabled: Set<DisplayProvider>, fallback: DisplayProvider
+        available: Set<DisplayProvider>, enabled: Set<DisplayProvider>
     ) -> Set<DisplayProvider> {
         let shown = available.intersection(enabled)
         if !shown.isEmpty { return shown }
-        // Keep the displayed fallback fresh even with externally edited preferences.
-        if available.contains(fallback) { return [fallback] }
+        // Recover from externally edited preferences with one authenticated provider.
         return DisplayProvider.displayOrder.first(where: available.contains).map { [$0] } ?? []
     }
 }

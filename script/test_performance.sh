@@ -14,6 +14,9 @@ cat > "$TEST_APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
+# Join controller/test extensions for private fixture state without shipped test APIs.
+cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
+  "$ROOT_DIR/Tests/PerformanceRegressionTests.swift" > "$TEST_DIR/RefreshTests.swift"
 xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
   "$ROOT_DIR/JustaUsageBar/Models/DisplayProvider.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageData.swift" \
@@ -22,11 +25,8 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O 
   "$ROOT_DIR/JustaUsageBar/Services/ProviderActor.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/ProviderHTTP.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/RepeatingTimer.swift" \
-  "$ROOT_DIR/JustaUsageBar/Services/TerminalAgentDetector.swift" \
-  "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
   "$ROOT_DIR/Tests/ProviderFixtures.swift" \
-  "$ROOT_DIR/Tests/TerminalStandIn.swift" \
-  "$ROOT_DIR/Tests/PerformanceRegressionTests.swift" \
+  "$TEST_DIR/RefreshTests.swift" \
   -o "$TEST_APP/Contents/MacOS/UsagebarPerformanceTests"
 "$TEST_APP/Contents/MacOS/UsagebarPerformanceTests"
 
@@ -42,7 +42,6 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O 
   "$ROOT_DIR/JustaUsageBar/Views/PopoverView.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/SettingsView.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/UsagePanelView.swift" \
-  "$ROOT_DIR/Tests/TerminalStandIn.swift" \
   "$TEST_DIR/RenderingTests.swift" \
   -o "$TEST_APP/Contents/MacOS/UsagebarPerformanceTests"
 "$TEST_APP/Contents/MacOS/UsagebarPerformanceTests"

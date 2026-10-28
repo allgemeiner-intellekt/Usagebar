@@ -44,6 +44,8 @@ jobs:
           ruby -c Casks/usagebar.rb
           ruby -rjson -e 'abort unless JSON.parse(File.read("cask_renames.json")) == {"justausagebar" => "usagebar"}'
       - name: Run performance and rendering regression tests
+        env:
+          USAGEBAR_RENDER_OUTPUT: ${{ github.workspace }}/build/Artifact/status-preview.png
         run: ./script/test_performance.sh
       - name: Package personal build
         run: bash script/package_artifact.sh

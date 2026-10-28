@@ -8,6 +8,6 @@ nonisolated enum DisplayProvider: String, CaseIterable, Sendable {
     case zai
     case xai
 
-    /// Fixed left-to-right order used for cycling and menu layout.
+    /// Fixed provider order used for panel layout and refresh fallback.
     static let displayOrder: [DisplayProvider] = [.claude, .codex, .cursor, .kimi, .zai, .xai]
 }

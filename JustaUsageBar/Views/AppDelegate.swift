@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var menu: NSMenu!
     private var isMenuOpen = false {
-        didSet { viewModel.menuVisibilityChanged(isOpen: isMenuOpen || isPanelOpen) }
+        didSet { viewModel.usageVisibilityChanged(isVisible: isMenuOpen || isPanelOpen) }
     }
     private let panelModel = UsagePanelModel()
     private lazy var panel: UsagePanel = {
@@ -31,22 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }()
     /// While the panel is open every provider refreshes at the on-screen rate.
     private var isPanelOpen = false {
-        didSet { viewModel.menuVisibilityChanged(isOpen: isMenuOpen || isPanelOpen) }
-    }
-    private var lastRenderKey: StatusRenderKey?
-    private var cachedStatusImages: [DisplayProvider: (StatusRenderKey, NSImage, CGFloat)] = [:]
-
-    private struct StatusRenderKey: Equatable {
-        let provider: DisplayProvider
-        let primary: Int
-        let secondary: Int?
-        let windowLabel: String
-        let showIcon: Bool
-        let only5h: Bool
-        let onlyWeekly: Bool
-        let dark: Bool
-        let scale: CGFloat
-        let updateBadge: Bool
+        didSet { viewModel.usageVisibilityChanged(isVisible: isMenuOpen || isPanelOpen) }
     }
     private let viewModel: UsageViewModel
 
@@ -58,20 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.viewModel = viewModel
         super.init()
     }
-    private var lastStatusLength: CGFloat = 0
-    private var credentialsWindow: NSWindow?
-    private let preferredProviderDefaultsKey = "preferredDisplayProvider"
 
-    // Provider switching state
-    private var currentProvider: DisplayProvider = .claude
-    private let providerSwitchTimer = RepeatingTimer()
-    private var rotationSignature = ""
-    /// Provider forced by the frontmost app (Claude/ChatGPT/Codex/ZCode) or by the
-    /// AI CLI in its terminal, nil when neither is active.
-    private var focusProvider: DisplayProvider?
-    private var terminalWatch: Task<Void, Never>?
-    /// What the terminal watch last found in the frontmost app.
-    private var terminalProvider: DisplayProvider?
+    private var credentialsWindow: NSWindow?
 
     // Update availability state
     private var availableUpdateVersion: String?
@@ -93,24 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NSApp.setActivationPolicy(.accessory)
         presentPendingUpdateFailureIfNeeded()
-
-        followFrontmostApp()
-        if viewModel.hasCredentials {
-            syncCurrentProvider(preferSavedSelection: true, persistPreference: true)
-            restartProviderAnimation()
-        } else {
-            showSetupStatus()
-        }
     }
 
     private func observeChanges() {
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(appearanceChanged),
-            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
-            object: nil
-        )
-
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(settingsChanged),
@@ -124,159 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSNotification.Name("UsageDataChanged"),
             object: nil
         )
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(backgroundActivityChanged),
-            name: NSNotification.Name("BackgroundActivityChanged"),
-            object: nil
-        )
-
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(activeAppChanged(_:)),
-            name: NSWorkspace.didActivateApplicationNotification,
-            object: nil
-        )
-    }
-
-    // MARK: - Focus-Aware Provider
-
-    @objc private func activeAppChanged(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
-            return
-        }
-        follow(app)
-    }
-
-    private func followFrontmostApp() {
-        if let app = NSWorkspace.shared.frontmostApplication {
-            follow(app)
-        }
-    }
-
-    /// Shows the provider of the AI app in front. Any other app leaves the last
-    /// provider on screen, unless an AI CLI runs in one of its terminal sessions.
-    private func follow(_ app: NSRunningApplication) {
-        if viewModel.followActiveApp {
-            setFocus(provider(matching: app))
-        }
-        terminalProvider = nil
-        watchTerminalSessions(of: app)
-    }
-
-    /// Restarts the watch without re-applying the app's focus, so a manual pick
-    /// survives sleep and refreshes.
-    private func resumeTerminalWatch() {
-        if let app = NSWorkspace.shared.frontmostApplication {
-            watchTerminalSessions(of: app)
-        }
-    }
-
-    private func setFocus(_ provider: DisplayProvider?) {
-        guard provider != focusProvider else { return }
-        focusProvider = provider
-        restartProviderAnimation()
-    }
-
-    /// Polls the app's terminal sessions off the main thread while it stays in front.
-    private func watchTerminalSessions(of app: NSRunningApplication) {
-        terminalWatch?.cancel()
-        terminalWatch = nil
-        guard viewModel.followActiveApp, !viewModel.isBackgroundSuspended, displayableProviders().count > 1,
-              provider(matching: app) == nil else { return }
-        let pid = app.processIdentifier
-        let isTerminal = TerminalAgentDetector.terminalBundleIDs.contains(app.bundleIdentifier?.lowercased() ?? "")
-        let isLowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-        let known = terminalProvider
-
-        terminalWatch = Task.detached(priority: .utility) { [weak self] in
-            var reported = known
-            var scans = 0
-            while !Task.isCancelled {
-                let scan = TerminalAgentDetector.scan(app: pid, isTerminal: isTerminal)
-                guard scan.hostsTerminals else { return }
-                // Once its CLI is gone, a terminal is like any other app.
-                if scan.provider != reported {
-                    reported = scan.provider
-                    await self?.terminalSessionChanged(to: scan.provider)
-                }
-                // A CLI is most often started right after its terminal comes forward.
-                scans += 1
-                let interval: Duration = isLowPower ? .seconds(10) : (scans < 5 ? .seconds(3) : .seconds(6))
-                try? await Task.sleep(for: interval, tolerance: .seconds(1))
-            }
-        }
-    }
-
-    private func terminalSessionChanged(to provider: DisplayProvider?) {
-        // The app may have left the front while this result crossed threads.
-        guard !Task.isCancelled else { return }
-        terminalProvider = provider
-        setFocus(provider)
-    }
-
-    private func provider(matching app: NSRunningApplication) -> DisplayProvider? {
-        let bundleId = app.bundleIdentifier?.lowercased() ?? ""
-        let name = app.localizedName?.lowercased() ?? ""
-
-        if bundleId.hasPrefix("com.anthropic.") || name == "claude" {
-            return .claude
-        }
-        if bundleId.hasPrefix("com.openai.") || name == "chatgpt" || name == "codex" {
-            return .codex
-        }
-        // Cursor ships under a ToDesktop bundle id; match it and the app name.
-        // Grok Bot is Cursor's agent app and runs on the Cursor subscription.
-        if bundleId == "com.todesktop.230313mzl4w4u92" || bundleId == "com.anysphere.sand" || name == "cursor" {
-            return .cursor
-        }
-        if bundleId.contains("kimi") || bundleId.hasPrefix("com.moonshot.") || name == "kimi" {
-            return .kimi
-        }
-        if bundleId == "dev.zcode.app" || name == "zcode" {
-            return .zai
-        }
-        // Grok / xAI apps and Terminal sessions named around Grok Build.
-        if bundleId.contains("xai") || bundleId.contains("x.ai") || name == "grok" || name.contains("grok") {
-            return .xai
-        }
-        return nil
-    }
-
-    @objc private func appearanceChanged() {
-        if viewModel.hasCredentials {
-            updateStatusImage()
-        }
-    }
-
-    @objc private func backgroundActivityChanged() {
-        restartProviderAnimation()
-        resumeTerminalWatch()
     }
 
     @objc private func settingsChanged() {
         viewModel.providerSettingsChanged()
-        if viewModel.hasCredentials {
-            syncCurrentProvider()
-            restartProviderAnimation()
-        } else {
-            showSetupStatus()
-        }
         rebuildMenu()
     }
 
     @objc private func usageDataChanged() {
-        if viewModel.hasCredentials {
-            syncCurrentProvider()
-            if currentRotationSignature != rotationSignature {
-                restartProviderAnimation()
-                resumeTerminalWatch()
-            }
-            updateStatusImage()
-        } else {
-            showSetupStatus()
-        }
         rebuildMenu()
         maybeCheckForUpdateInBackground()
     }
@@ -308,7 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if availableUpdateVersion != nil {
                 availableUpdateVersion = nil
                 rebuildMenu()
-                updateStatusImage()
             }
             return
         }
@@ -317,7 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         availableUpdateVersion = release.version
         if isNewDiscovery {
             rebuildMenu()
-            updateStatusImage()
 
             let defaults = UserDefaults.standard
             let lastAttempted = defaults.string(forKey: Self.lastAutoUpdateVersionDefaultsKey)
@@ -329,68 +140,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.isVisible = true
 
-        // Add click handler to toggle providers
         if let button = statusItem.button {
+            let image = NSImage(systemSymbolName: "chart.bar", accessibilityDescription: "Usagebar")?
+                .withSymbolConfiguration(.init(pointSize: 16, weight: .regular))
+            image?.isTemplate = true
+            button.image = image
+            button.imagePosition = .imageOnly
+            button.setAccessibilityLabel("Usagebar")
+            button.toolTip = "Usagebar"
             button.action = #selector(statusBarButtonClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-    }
-
-    private func showSetupStatus() {
-        stopProviderAnimation()
-        lastRenderKey = nil
-        guard let button = statusItem.button else { return }
-
-        let width: CGFloat = 50
-        let height: CGFloat = 22
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-
-        let isDarkMode: Bool = {
-            return button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        }()
-
-        let anthropicOrange = NSColor(red: 0.83, green: 0.53, blue: 0.30, alpha: 1.0)
-        let textColor = isDarkMode ? NSColor.white : NSColor(white: 0.25, alpha: 1.0)
-
-        let starAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 7, weight: .bold),
-            .foregroundColor: anthropicOrange
-        ]
-        let starString = NSAttributedString(string: "\u{2733}\u{FE0E}", attributes: starAttributes)
-
-        let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 7, weight: .medium),
-            .foregroundColor: textColor
-        ]
-        let labelString = NSAttributedString(string: "Claude", attributes: labelAttributes)
-
-        let totalLabelWidth = starString.size().width + 1 + labelString.size().width
-        let labelStartX = (width - totalLabelWidth) / 2
-
-        starString.draw(at: NSPoint(x: labelStartX, y: 12))
-        labelString.draw(at: NSPoint(x: labelStartX + starString.size().width + 1, y: 12))
-
-        let setupAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 9, weight: .medium),
-            .foregroundColor: anthropicOrange
-        ]
-        let setupString = NSAttributedString(string: "Setup", attributes: setupAttributes)
-        let setupX = (width - setupString.size().width) / 2
-        setupString.draw(at: NSPoint(x: setupX, y: 0))
-
-        image.unlockFocus()
-        image.isTemplate = false
-
-        lastStatusLength = width
-        statusItem.length = width
-        button.image = image
-        button.toolTip = nil
     }
 
     private func setupMenu() {
@@ -458,26 +222,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Display submenu
             let displayMenu = NSMenu()
 
-            let bothItem = NSMenuItem(title: "Show Both", action: #selector(showBoth), keyEquivalent: "")
-            bothItem.target = self
-            bothItem.state = (!viewModel.showOnly5hr && !viewModel.showOnlyWeekly) ? .on : .off
-            displayMenu.addItem(bothItem)
-
-            let only5hItem = NSMenuItem(title: "Show 5h Only", action: #selector(showOnly5h), keyEquivalent: "")
-            only5hItem.target = self
-            only5hItem.state = viewModel.showOnly5hr ? .on : .off
-            displayMenu.addItem(only5hItem)
-
-            let onlyWeeklyItem = NSMenuItem(title: "Show Weekly Only", action: #selector(showOnlyWeekly), keyEquivalent: "")
-            onlyWeeklyItem.target = self
-            onlyWeeklyItem.state = viewModel.showOnlyWeekly ? .on : .off
-            displayMenu.addItem(onlyWeeklyItem)
-
             // Provider toggles
             let authedProviderCount = [hasClaude, hasCodex, hasCursor, hasKimi, hasZai, hasXai].filter { $0 }.count
             if authedProviderCount > 0 {
-                displayMenu.addItem(NSMenuItem.separator())
-
                 if hasClaude {
                     let claudeToggle = NSMenuItem(title: "Show Claude", action: #selector(toggleShowClaude), keyEquivalent: "")
                     claudeToggle.target = self
@@ -519,52 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     xaiToggle.state = viewModel.showXai ? .on : .off
                     displayMenu.addItem(xaiToggle)
                 }
-
-                // Follow-active-app + switch-interval apply once 2+ providers show.
-                if authedProviderCount >= 2 {
-                    displayMenu.addItem(NSMenuItem.separator())
-
-                    let followItem = NSMenuItem(title: "Follow Active App", action: #selector(toggleFollowActiveApp), keyEquivalent: "")
-                    followItem.target = self
-                    followItem.state = viewModel.followActiveApp ? .on : .off
-                    followItem.toolTip = "Show the provider of the AI app or terminal CLI you used last (Claude, ChatGPT/Codex, Cursor or Grok Bot, KimiCode, ZCode, or Grok)"
-                    displayMenu.addItem(followItem)
-
-                    let intervalMenu = NSMenu()
-
-                    // Add Manual option (tag = 0 means no auto-switching)
-                    let manualItem = NSMenuItem(title: "Manual", action: #selector(setAnimationInterval(_:)), keyEquivalent: "")
-                    manualItem.target = self
-                    manualItem.tag = 0
-                    manualItem.state = (viewModel.animationInterval == 0) ? .on : .off
-                    intervalMenu.addItem(manualItem)
-
-                    intervalMenu.addItem(NSMenuItem.separator())
-
-                    for seconds: Double in [5, 8, 10, 15, 30] {
-                        let label = seconds < 60 ? "\(Int(seconds))s" : "\(Int(seconds / 60))m"
-                        let item = NSMenuItem(title: label, action: #selector(setAnimationInterval(_:)), keyEquivalent: "")
-                        item.target = self
-                        item.tag = Int(seconds)
-                        item.state = (viewModel.animationInterval == seconds) ? .on : .off
-                        intervalMenu.addItem(item)
-                    }
-
-                    let intervalItem = NSMenuItem(title: "Switch Every", action: nil, keyEquivalent: "")
-                    intervalItem.submenu = intervalMenu
-                    displayMenu.addItem(intervalItem)
-                }
             }
 
             let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
             displayItem.submenu = displayMenu
             menu.addItem(displayItem)
-
-            // Icon toggle
-            let iconItem = NSMenuItem(title: "Show Icon", action: #selector(toggleIcon), keyEquivalent: "")
-            iconItem.target = self
-            iconItem.state = viewModel.showIcon ? .on : .off
-            menu.addItem(iconItem)
 
             // Launch at login
             let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -630,8 +336,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    // MARK: - Menu Actions
-
     // MARK: - Usage Panel
 
     private func togglePanel() {
@@ -652,7 +356,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard isPanelOpen else { return }
         panelModel.needsSetup = !viewModel.hasCredentials
         panelModel.cards = panelCards()
-        panelModel.currentProvider = viewModel.hasCredentials ? currentProvider : nil
         panelModel.updateVersion = availableUpdateVersion
         panelModel.isRefreshing = viewModel.isLoading
         panelModel.updatedText = updatedText(viewModel.lastUpdated)
@@ -776,15 +479,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func configurePanelActions() {
-        panelModel.onSelect = { [weak self] provider in
-            guard let self, self.canDisplay(provider) else { return }
-            // A pick in the panel wins like a click on the status item.
-            self.focusProvider = nil
-            self.setCurrentProvider(provider)
-            self.restartProviderAnimation()
-            self.updateStatusImage()
-            self.updatePanel()
-        }
         panelModel.onAction = { [weak self] provider in
             self?.panel.close()
             switch provider {
@@ -815,29 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func statusBarButtonClicked() {
-        let event = NSApp.currentEvent
-
-        // Right click shows the usage panel
-        if event?.type == .rightMouseUp {
-            togglePanel()
-            return
-        }
-
-        // Left click cycles to the next provider when more than one is shown
-        if event?.type == .leftMouseUp {
-            if displayableProviders().count > 1, let next = providerAfter(currentProvider) {
-                // A manual click always wins, even while focus-follow has the
-                // bar locked to the frontmost app's provider. Suspend the lock
-                // for now; the next app switch (including switching back to
-                // Claude/Cursor/etc.) re-applies focus-follow.
-                focusProvider = nil
-                setCurrentProvider(next)
-                restartProviderAnimation()
-            } else {
-                // If only one provider, show the usage panel
-                togglePanel()
-            }
-        }
+        togglePanel()
     }
 
     @objc private func showCredentialsWindow() {
@@ -846,8 +518,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.viewModel.saveCredentials(sessionKey: sessionKey, organizationId: orgId)
                 self?.credentialsWindow?.close()
                 self?.credentialsWindow = nil
-                self?.updateStatusImage()
-                self?.startProviderAnimation()
                 self?.rebuildMenu()
             })
 
@@ -951,40 +621,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
     }
 
-    @objc private func showBoth() {
-        viewModel.showOnly5hr = false
-        viewModel.showOnlyWeekly = false
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func showOnly5h() {
-        viewModel.showOnly5hr = true
-        viewModel.showOnlyWeekly = false
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func showOnlyWeekly() {
-        viewModel.showOnly5hr = false
-        viewModel.showOnlyWeekly = true
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
     @objc private func toggleAutoUpdate() {
         viewModel.autoUpdate.toggle()
         rebuildMenu()
     }
 
-    @objc private func toggleFollowActiveApp() {
-        viewModel.followActiveApp.toggle()
-        focusProvider = nil
-        syncCurrentProvider(preferSavedSelection: true)
-        followFrontmostApp()
-        restartProviderAnimation()
-        rebuildMenu()
-    }
-
     /// Re-enables the just-toggled provider if hiding it would leave no
-    /// authenticated provider visible (the bar must never go blank).
+    /// authenticated provider in the panel.
     private func ensureAProviderRemainsShown(fallback keyPath: ReferenceWritableKeyPath<UsageViewModel, Bool>) {
         let anyShown =
             (viewModel.showClaude && viewModel.hasClaudeCredentials) ||
@@ -1034,20 +677,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
     }
 
-    @objc private func setAnimationInterval(_ sender: NSMenuItem) {
-        viewModel.animationInterval = Double(sender.tag)
-        if viewModel.animationInterval == 0 {
-            preferredProvider = currentProvider
-        }
-        restartProviderAnimation()
-        rebuildMenu()
-    }
-
-    @objc private func toggleIcon() {
-        viewModel.showIcon.toggle()
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
     @objc private func toggleLaunchAtLogin() {
         viewModel.launchAtStartup.toggle()
         rebuildMenu()
@@ -1055,37 +684,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func signOutClaude() {
         viewModel.clearClaudeCredentials()
-        if !viewModel.hasCredentials {
-            stopProviderAnimation()
-            showSetupStatus()
-        } else {
-            syncCurrentProvider(persistPreference: true)
-            updateStatusImage()
-        }
         rebuildMenu()
     }
 
     @objc private func signOutCodex() {
         viewModel.clearCodexCredentials()
-        if !viewModel.hasCredentials {
-            stopProviderAnimation()
-            showSetupStatus()
-        } else {
-            syncCurrentProvider(persistPreference: true)
-            updateStatusImage()
-        }
         rebuildMenu()
     }
 
     @objc private func clearKimiCredential() {
         viewModel.clearKimiCredential()
-        if !viewModel.hasCredentials {
-            stopProviderAnimation()
-            showSetupStatus()
-        } else {
-            syncCurrentProvider(persistPreference: true)
-            updateStatusImage()
-        }
         rebuildMenu()
     }
 
@@ -1124,7 +732,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .alreadyUpToDate(let status):
                 availableUpdateVersion = nil
                 rebuildMenu()
-                updateStatusImage()
                 if interactive {
                     presentAlert(
                         title: "Already up to date",
@@ -1579,375 +1186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return trimmedLines.prefix(6).joined(separator: "\n")
     }
 
-    // MARK: - Provider Animation
-
-    private var preferredProvider: DisplayProvider {
-        get {
-            guard
-                let rawValue = UserDefaults.standard.string(forKey: preferredProviderDefaultsKey),
-                let provider = DisplayProvider(rawValue: rawValue)
-            else {
-                return .claude
-            }
-            return provider
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: preferredProviderDefaultsKey)
-        }
-    }
-
-    private func hasCredentials(for provider: DisplayProvider) -> Bool {
-        switch provider {
-        case .claude:
-            return viewModel.hasClaudeCredentials
-        case .codex:
-            return viewModel.hasCodexCredentials
-        case .cursor:
-            return viewModel.hasCursorCredentials
-        case .kimi:
-            return viewModel.hasKimiCredentials
-        case .zai:
-            return viewModel.hasZaiCredentials
-        case .xai:
-            return viewModel.hasXaiCredentials
-        }
-    }
-
-    private func isProviderEnabled(_ provider: DisplayProvider) -> Bool {
-        switch provider {
-        case .claude:
-            return viewModel.showClaude
-        case .codex:
-            return viewModel.showCodex
-        case .cursor:
-            return viewModel.showCursor
-        case .kimi:
-            return viewModel.showKimi
-        case .zai:
-            return viewModel.showZai
-        case .xai:
-            return viewModel.showXai
-        }
-    }
-
-    /// Every provider that is authenticated and toggled on, in display order.
-    private func enabledProvidersWithCredentials() -> [DisplayProvider] {
-        DisplayProvider.displayOrder.filter { hasCredentials(for: $0) && isProviderEnabled($0) }
-    }
-
-    private func hasShownProviderWithCredentials(excluding excludedProvider: DisplayProvider) -> Bool {
-        enabledProvidersWithCredentials().contains { $0 != excludedProvider }
-    }
-
-    private func canDisplay(_ provider: DisplayProvider) -> Bool {
-        guard hasCredentials(for: provider) else { return false }
-
-        if isProviderEnabled(provider) {
-            return true
-        }
-
-        // If the saved provider is the only authenticated one left, keep showing it
-        // instead of falling back to a blank/incorrect status item.
-        return !hasShownProviderWithCredentials(excluding: provider)
-    }
-
-    /// Providers eligible to display right now, in fixed order.
-    private func displayableProviders() -> [DisplayProvider] {
-        let enabled = enabledProvidersWithCredentials()
-        if !enabled.isEmpty {
-            return enabled
-        }
-        // Nothing is both on and authenticated (e.g. all toggled off) — fall back
-        // to anything authenticated so the bar never goes blank.
-        return DisplayProvider.displayOrder.filter { hasCredentials(for: $0) }
-    }
-
-    /// The provider shown after the current one when cycling (click or timer).
-    private func providerAfter(_ provider: DisplayProvider) -> DisplayProvider? {
-        let providers = displayableProviders()
-        guard !providers.isEmpty else { return nil }
-        guard let index = providers.firstIndex(of: provider) else { return providers.first }
-        return providers[(index + 1) % providers.count]
-    }
-
-    private func resolveProvider(preferred provider: DisplayProvider) -> DisplayProvider? {
-        if canDisplay(provider) {
-            return provider
-        }
-        return displayableProviders().first
-    }
-
-    private func setCurrentProvider(_ provider: DisplayProvider, persistPreference: Bool = true) {
-        currentProvider = provider
-        viewModel.displayedProviderChanged(provider)
-
-        if persistPreference {
-            preferredProvider = provider
-        }
-    }
-
-    private func syncCurrentProvider(preferSavedSelection: Bool = false, persistPreference: Bool = false) {
-        // A Claude/ChatGPT/Codex app in front wins over saved selection and timer.
-        if viewModel.followActiveApp, let focusProvider, canDisplay(focusProvider) {
-            setCurrentProvider(focusProvider, persistPreference: false)
-            return
-        }
-
-        let preferredSelection = preferSavedSelection ? preferredProvider : currentProvider
-
-        guard let resolvedProvider = resolveProvider(preferred: preferredSelection) else {
-            return
-        }
-
-        setCurrentProvider(resolvedProvider, persistPreference: persistPreference)
-    }
-
-    private var currentRotationSignature: String {
-        [String(viewModel.shouldAnimateProviders), String(viewModel.animationInterval),
-         viewModel.followActiveApp ? (focusProvider?.rawValue ?? "none") : "manual",
-         displayableProviders().map(\.rawValue).joined(separator: ",")].joined(separator: "|")
-    }
-
-    private func startProviderAnimation() {
-        stopProviderAnimation()
-        syncCurrentProvider()
-        rotationSignature = currentRotationSignature
-
-        // Hold on the focused app's provider instead of flipping under it.
-        let holdsFocus = viewModel.followActiveApp && focusProvider.map(canDisplay) == true
-        let rotates = viewModel.shouldAnimateProviders && !holdsFocus
-        viewModel.rotationChanged(isRotating: rotates)
-        guard rotates else { return }
-
-        providerSwitchTimer.start(every: viewModel.animationInterval) { [weak self] in
-            guard let self, let nextProvider = self.providerAfter(self.currentProvider) else { return }
-            self.setCurrentProvider(nextProvider, persistPreference: false)
-            self.updateStatusImage()
-        }
-    }
-
-    private func stopProviderAnimation() {
-        providerSwitchTimer.stop()
-        rotationSignature = ""
-    }
-
-    private func restartProviderAnimation() {
-        stopProviderAnimation()
-        if viewModel.hasCredentials {
-            startProviderAnimation()
-            updateStatusImage()
-        }
-    }
-
-    // MARK: - Status Bar Image
-
-    private func updateStatusImage() {
-        guard let button = statusItem.button else { return }
-        syncCurrentProvider()
-
-        guard !viewModel.isBackgroundSuspended else { return }
-        let key = statusRenderKey()
-        guard key != lastRenderKey else { return }
-        let image: NSImage
-        let width: CGFloat
-        if let (cachedKey, cachedImage, cachedWidth) = cachedStatusImages[currentProvider], cachedKey == key {
-            image = cachedImage
-            width = cachedWidth
-        } else {
-            (image, width) = createProviderImage(for: currentProvider)
-            cachedStatusImages[currentProvider] = (key, image, width)
-        }
-        lastRenderKey = key
-
-        if lastStatusLength != width {
-            lastStatusLength = width
-            statusItem.length = width
-        }
-
-        button.image = image
-        button.toolTip = nil
-    }
-
-    private func statusRenderKey() -> StatusRenderKey {
-        let primary: Int
-        let secondary: Int?
-        let label: String
-        switch currentProvider {
-        case .claude:
-            primary = viewModel.usageData.fiveHourUsed
-            secondary = viewModel.usageData.weeklyUsed
-            label = "5h"
-        case .codex:
-            primary = viewModel.codexUsageData.primaryUsedPercent
-            secondary = viewModel.codexUsageData.primaryIsWeekly ? nil : viewModel.codexUsageData.secondaryUsedPercent
-            label = viewModel.codexUsageData.primaryWindowLabel
-        case .cursor:
-            primary = viewModel.cursorUsageData.usedPercent
-            secondary = nil
-            label = viewModel.cursorUsageData.windowLabel
-        case .kimi:
-            primary = viewModel.kimiUsageData.weeklyUsedPercent
-            secondary = viewModel.kimiUsageData.fiveHourUsedPercent
-            label = "7d"
-        case .zai:
-            primary = viewModel.zaiUsageData.usedPercent
-            secondary = nil
-            label = viewModel.zaiUsageData.windowLabel
-        case .xai:
-            primary = viewModel.xaiUsageData.primaryUsedPercent
-            secondary = nil
-            label = viewModel.xaiUsageData.primaryWindowLabel
-        }
-        return StatusRenderKey(
-            provider: currentProvider, primary: primary, secondary: secondary, windowLabel: label,
-            showIcon: viewModel.showIcon, only5h: viewModel.showOnly5hr, onlyWeekly: viewModel.showOnlyWeekly,
-            dark: getDarkMode(), scale: statusItem.button?.window?.backingScaleFactor ?? 2,
-            updateBadge: availableUpdateVersion != nil
-        )
-    }
-
-    private func createProviderImage(for provider: DisplayProvider) -> (NSImage, CGFloat) {
-        switch provider {
-        case .claude:
-            return createClaudeImage()
-        case .codex:
-            return createCodexImage()
-        case .cursor:
-            return createSimpleProviderImage(
-                label: "Cursor",
-                brandColor: brandCursorColor,
-                usedPercent: viewModel.cursorUsageData.usedPercent,
-                glyph: .cursor,
-                windowLabel: viewModel.cursorUsageData.windowLabel
-            )
-        case .kimi:
-            return createKimiImage()
-        case .zai:
-            return createSimpleProviderImage(
-                label: "Code",
-                brandColor: brandZaiColor,
-                usedPercent: viewModel.zaiUsageData.usedPercent,
-                glyph: .zai,
-                windowLabel: viewModel.zaiUsageData.windowLabel
-            )
-        case .xai:
-            return createSimpleProviderImage(
-                label: "XAI",
-                brandColor: brandXaiColor,
-                usedPercent: viewModel.xaiUsageData.primaryUsedPercent,
-                glyph: .xai,
-                windowLabel: viewModel.xaiUsageData.primaryWindowLabel
-            )
-        }
-    }
-
-    // MARK: - Cursor / Zai Image (shared single-value renderer)
-
-    private enum ProviderGlyph {
-        case cursor
-        case kimi
-        case zai
-        case xai
-    }
-
-    /// Compact status image for the single-percentage providers: brand glyph +
-    /// name on top (when the icon is shown), one big percentage underneath.
-    /// `windowLabel` is the tiny window hint before the number (e.g. "M").
-    private func createSimpleProviderImage(
-        label: String,
-        brandColor: NSColor,
-        usedPercent: Int,
-        glyph: ProviderGlyph,
-        windowLabel: String = ""
-    ) -> (NSImage, CGFloat) {
-        let showIcon = viewModel.showIcon
-        let width: CGFloat = 50
-        let height: CGFloat = showIcon ? 22 : 16
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-
-        let isDarkMode = getDarkMode()
-        let textColor = isDarkMode ? NSColor.white : NSColor(white: 0.25, alpha: 1.0)
-
-        var yOffset: CGFloat = 0
-        if showIcon {
-            // Cursor's and ZCode's marks are monochrome — adapt to the menu
-            // bar theme instead of using the accent color.
-            let glyphColor: NSColor = switch glyph {
-            case .cursor, .zai: isDarkMode ? NSColor.white : NSColor(white: 0.1, alpha: 1.0)
-            case .kimi: brandColor
-            case .xai: brandColor
-            }
-            if glyph == .cursor {
-                drawCursorPlanMarks(centerX: width / 2, y: 12.5, height: 8, color: glyphColor)
-            } else {
-                let glyphSize: CGFloat = 7
-                let labelAttributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
-                    .foregroundColor: textColor
-                ]
-                // The ZCode mark reads as the "Z" of "ZCode", so its label sits closer.
-                let labelString = NSAttributedString(string: glyph == .zai ? label : " \(label)", attributes: labelAttributes)
-                let glyphAdvance: CGFloat = glyph == .zai ? glyphSize + 1 : glyphSize
-                let totalWidth = glyphAdvance + labelString.size().width
-                let startX = (width - totalWidth) / 2
-                drawGlyph(glyph, in: NSRect(x: startX, y: 13, width: glyphSize, height: glyphSize), color: glyphColor)
-                labelString.draw(at: NSPoint(x: startX + glyphAdvance, y: 12))
-            }
-            yOffset = 0
-        } else {
-            yOffset = 3
-        }
-
-        let valueColor = usageHighlightColor(
-            percentage: usedPercent,
-            highThreshold: 90,
-            accentColor: brandColor,
-            fallback: textColor
-        )
-        let numberAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: valueColor
-        ]
-        let percentAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: valueColor
-        ]
-        let valuesString = NSMutableAttributedString()
-        if !windowLabel.isEmpty {
-            let tinyLabelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 6, weight: .regular),
-                .foregroundColor: textColor.withAlphaComponent(0.7)
-            ]
-            valuesString.append(NSAttributedString(string: "\(windowLabel) ", attributes: tinyLabelAttributes))
-        }
-        valuesString.append(NSAttributedString(string: "\(usedPercent)", attributes: numberAttributes))
-        valuesString.append(NSAttributedString(string: "%", attributes: percentAttributes))
-        valuesString.draw(at: NSPoint(x: (width - valuesString.size().width) / 2, y: yOffset))
-
-        if availableUpdateVersion != nil {
-            brandClaudeColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: width - 5, y: height - 5, width: 4, height: 4)).fill()
-        }
-
-        image.unlockFocus()
-        image.isTemplate = false
-        return (image, width)
-    }
-
-    /// Cursor's plan is shared by xAI, Grok, Cursor and Grok Bot, so its status
-    /// item shows those four marks in a centered row instead of a glyph + name.
-    /// The marks are vector paths so they stay sharp at any backing scale.
-    private func drawCursorPlanMarks(centerX: CGFloat, y: CGFloat, height: CGFloat, color: NSColor) {
-        let marks = cursorPlanMarkPaths(height: height)
-        let shift = AffineTransform(translationByX: centerX - marks.width / 2, byY: y)
-        color.setFill()
-        for path in marks.paths {
-            path.transform(using: shift)
-            path.fill()
-        }
-    }
+    // MARK: - Panel Provider Marks
 
     /// The four marks laid out left to right from the origin, `height` tall.
     private func cursorPlanMarkPaths(height: CGFloat) -> (paths: [NSBezierPath], width: CGFloat) {
@@ -2078,410 +1317,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return path
     }
 
-    /// Draws a small brand glyph. Cursor = hexagon mark; Zai = ZCode's Z mark.
-    private func drawGlyph(_ glyph: ProviderGlyph, in rect: NSRect, color: NSColor) {
-        color.set()
-        switch glyph {
-        case .cursor:
-            let path = cursorCubePath()
-            var transform = AffineTransform(translationByX: rect.minX, byY: rect.minY)
-            transform.scale(rect.height)
-            path.transform(using: transform)
-            path.fill()
-        case .kimi:
-            let kAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-                .foregroundColor: NSColor.black
-            ]
-            let k = NSAttributedString(string: "K", attributes: kAttrs)
-            k.draw(at: NSPoint(x: rect.minX, y: rect.minY - 1))
-
-            let accent = NSBezierPath()
-            accent.move(to: NSPoint(x: rect.minX + 5.4, y: rect.maxY - 0.4))
-            accent.line(to: NSPoint(x: rect.minX + 6.5, y: rect.maxY + 1.0))
-            accent.lineWidth = 1.1
-            accent.lineCapStyle = .round
-            brandKimiColor.setStroke()
-            accent.stroke()
-        case .zai:
-            let path = zcodeMarkPath()
-            let height = rect.width / 1.13
-            var transform = AffineTransform(translationByX: rect.minX, byY: rect.minY + (rect.height - height) / 2)
-            transform.scale(height)
-            path.transform(using: transform)
-            path.fill()
-        case .xai:
-            let xAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-                .foregroundColor: color
-            ]
-            let x = NSAttributedString(string: "X", attributes: xAttrs)
-            x.draw(at: NSPoint(x: rect.minX, y: rect.minY - 1))
-        }
-    }
-
-    // MARK: - KimiCode Image
-
-    private func createKimiImage() -> (NSImage, CGFloat) {
-        let showIcon = viewModel.showIcon
-        let kimi = viewModel.kimiUsageData
-        let fiveHour = kimi.fiveHourUsedPercent
-        let showOnly5hr = viewModel.showOnly5hr && fiveHour != nil
-        let showOnlyWeekly = viewModel.showOnlyWeekly || fiveHour == nil
-        let width: CGFloat = showOnly5hr || showOnlyWeekly ? 50 : 80
-        let height: CGFloat = showIcon ? 22 : 16
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-
-        let isDarkMode = getDarkMode()
-        let textColor = isDarkMode ? NSColor.white : NSColor(white: 0.25, alpha: 1.0)
-        let yOffset: CGFloat = showIcon ? 0 : 3
-
-        if showIcon {
-            let glyphSize: CGFloat = 7
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
-                .foregroundColor: textColor
-            ]
-            let labelString = NSAttributedString(string: " KimiCode", attributes: labelAttributes)
-            let totalWidth = glyphSize + labelString.size().width
-            let startX = (width - totalWidth) / 2
-
-            drawGlyph(
-                .kimi,
-                in: NSRect(x: startX, y: 13, width: glyphSize, height: glyphSize),
-                color: textColor
-            )
-            labelString.draw(at: NSPoint(x: startX + glyphSize, y: 12))
-        }
-
-        let weekly = kimi.weeklyUsedPercent
-        let fiveHourColor = usageHighlightColor(
-            percentage: fiveHour ?? 0,
-            highThreshold: 90,
-            accentColor: brandKimiColor,
-            fallback: textColor
-        )
-        let weeklyColor = usageHighlightColor(
-            percentage: weekly,
-            highThreshold: 80,
-            accentColor: brandKimiColor,
-            fallback: textColor
-        )
-        let tinyLabelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 6, weight: .regular),
-            .foregroundColor: textColor.withAlphaComponent(0.7)
-        ]
-        let valuesString = NSMutableAttributedString()
-
-        if !showOnlyWeekly, let fiveHour {
-            valuesString.append(NSAttributedString(string: "5h ", attributes: tinyLabelAttributes))
-            valuesString.append(usageValueString(fiveHour, color: fiveHourColor))
-        }
-
-        if !showOnly5hr {
-            if !showOnlyWeekly {
-                valuesString.append(NSAttributedString(string: "  ", attributes: tinyLabelAttributes))
-            }
-            valuesString.append(NSAttributedString(string: "W ", attributes: tinyLabelAttributes))
-            valuesString.append(usageValueString(weekly, color: weeklyColor))
-        }
-
-        valuesString.draw(at: NSPoint(x: (width - valuesString.size().width) / 2, y: yOffset))
-
-        if availableUpdateVersion != nil {
-            brandClaudeColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: width - 5, y: height - 5, width: 4, height: 4)).fill()
-        }
-
-        image.unlockFocus()
-        image.isTemplate = false
-        return (image, width)
-    }
-
-    private func usageValueString(_ percentage: Int, color: NSColor) -> NSAttributedString {
-        let value = NSMutableAttributedString(string: "\(percentage)", attributes: [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: color
-        ])
-        value.append(NSAttributedString(string: "%", attributes: [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: color
-        ]))
-        return value
-    }
-
-    // MARK: - Claude Image
-
-    private func createClaudeImage() -> (NSImage, CGFloat) {
-        let showIcon = viewModel.showIcon
-        let showOnly5hr = viewModel.showOnly5hr
-        let showOnlyWeekly = viewModel.showOnlyWeekly
-
-        var width: CGFloat = 80
-        if showOnly5hr || showOnlyWeekly { width = 50 }
-
-        let height: CGFloat = showIcon ? 22 : 16
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-
-        let isDarkMode = getDarkMode()
-        let textColor = isDarkMode ? NSColor.white : NSColor(white: 0.25, alpha: 1.0)
-
-        var yOffset: CGFloat = 0
-
-        if showIcon {
-            let starColor = brandClaudeColor
-            let starAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 7, weight: .bold),
-                .foregroundColor: starColor
-            ]
-            let starString = NSAttributedString(string: "\u{2733}\u{FE0E}", attributes: starAttributes)
-
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 7, weight: .medium),
-                .foregroundColor: textColor
-            ]
-            let labelString = NSAttributedString(string: "Claude", attributes: labelAttributes)
-
-            let totalLabelWidth = starString.size().width + 1 + labelString.size().width
-            let labelStartX = (width - totalLabelWidth) / 2
-
-            starString.draw(at: NSPoint(x: labelStartX, y: 12))
-            labelString.draw(at: NSPoint(x: labelStartX + starString.size().width + 1, y: 12))
-            yOffset = 0
-        } else {
-            yOffset = 3
-        }
-
-        let fiveHour = viewModel.usageData.fiveHourUsed
-        let weekly = viewModel.usageData.weeklyUsed
-
-        let fiveHourColor = usageHighlightColor(
-            percentage: fiveHour,
-            highThreshold: 90,
-            accentColor: brandClaudeColor,
-            fallback: textColor
-        )
-        let weeklyColor = usageHighlightColor(
-            percentage: weekly,
-            highThreshold: 80,
-            accentColor: brandClaudeColor,
-            fallback: textColor
-        )
-
-        let tinyLabelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 6, weight: .regular),
-            .foregroundColor: textColor.withAlphaComponent(0.7)
-        ]
-
-        let number5hAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: fiveHourColor
-        ]
-        let percent5hAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: fiveHourColor
-        ]
-        let numberWAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: weeklyColor
-        ]
-        let percentWAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: weeklyColor
-        ]
-
-        let valuesString = NSMutableAttributedString()
-
-        if !showOnlyWeekly {
-            valuesString.append(NSAttributedString(string: "5h ", attributes: tinyLabelAttributes))
-            valuesString.append(NSAttributedString(string: "\(fiveHour)", attributes: number5hAttributes))
-            valuesString.append(NSAttributedString(string: "%", attributes: percent5hAttributes))
-        }
-
-        if !showOnly5hr {
-            if !showOnlyWeekly {
-                valuesString.append(NSAttributedString(string: "  ", attributes: tinyLabelAttributes))
-            }
-            valuesString.append(NSAttributedString(string: "W ", attributes: tinyLabelAttributes))
-            valuesString.append(NSAttributedString(string: "\(weekly)", attributes: numberWAttributes))
-            valuesString.append(NSAttributedString(string: "%", attributes: percentWAttributes))
-        }
-
-        valuesString.draw(at: NSPoint(x: (width - valuesString.size().width) / 2, y: yOffset))
-
-        if availableUpdateVersion != nil {
-            brandClaudeColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: width - 5, y: height - 5, width: 4, height: 4)).fill()
-        }
-
-        image.unlockFocus()
-        image.isTemplate = false
-        return (image, width)
-    }
-
-    // MARK: - Codex Image
-
-    private func createCodexImage() -> (NSImage, CGFloat) {
-        let showIcon = viewModel.showIcon
-        // Once Codex's primary window IS the weekly one, the secondary weekly
-        // is redundant — show a single "W X%" like the other one-value providers.
-        let primaryIsWeekly = viewModel.codexUsageData.primaryIsWeekly
-        let showOnly5hr = viewModel.showOnly5hr || primaryIsWeekly
-        let showOnlyWeekly = viewModel.showOnlyWeekly && !primaryIsWeekly
-
-        var width: CGFloat = 80
-        if showOnly5hr || showOnlyWeekly { width = 50 }
-
-        let height: CGFloat = showIcon ? 22 : 16
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-
-        let isDarkMode = getDarkMode()
-        let textColor = isDarkMode ? NSColor.white : NSColor(white: 0.25, alpha: 1.0)
-        let codexBrandColor = isDarkMode ? NSColor.white : NSColor(white: 0.1, alpha: 1.0)
-
-        var yOffset: CGFloat = 0
-
-        if showIcon {
-            // Draw icon and "Codex" label (no gradient, just black/white)
-            let iconFont = NSFont.systemFont(ofSize: 6, weight: .regular)
-            let iconString = ">_"
-            let codexIconColor = codexBrandColor
-
-            let iconAttrs: [NSAttributedString.Key: Any] = [
-                .font: iconFont,
-                .foregroundColor: codexIconColor
-            ]
-            let codexIcon = NSAttributedString(string: iconString, attributes: iconAttrs)
-
-            let codexLabelAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
-                .foregroundColor: codexBrandColor
-            ]
-            let codexLabel = NSAttributedString(string: " Codex", attributes: codexLabelAttrs)
-
-            let totalLabelWidth = codexIcon.size().width + codexLabel.size().width
-            let labelStartX = (width - totalLabelWidth) / 2
-
-            codexIcon.draw(at: NSPoint(x: labelStartX, y: 12))
-            codexLabel.draw(at: NSPoint(x: labelStartX + codexIcon.size().width, y: 12))
-
-            yOffset = 0
-        } else {
-            yOffset = 3
-        }
-
-        let codex = viewModel.codexUsageData
-        let primary = codex.primaryUsedPercent
-        let secondary = codex.secondaryUsedPercent
-
-        // Use blue color for percentages based on usage
-        let primaryColor = usageHighlightColor(
-            percentage: primary,
-            highThreshold: 90,
-            accentColor: brandCodexColor,
-            fallback: textColor
-        )
-        let secondaryColor = usageHighlightColor(
-            percentage: secondary,
-            highThreshold: 80,
-            accentColor: brandCodexColor,
-            fallback: textColor
-        )
-
-        let tinyLabelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 6, weight: .regular),
-            .foregroundColor: textColor.withAlphaComponent(0.7)
-        ]
-
-        let numberPrimaryAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: primaryColor
-        ]
-        let percentPrimaryAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: primaryColor
-        ]
-        let numberSecondaryAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: secondaryColor
-        ]
-        let percentSecondaryAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: secondaryColor
-        ]
-
-        let valuesString = NSMutableAttributedString()
-
-        if !showOnlyWeekly {
-            let windowLabel = codex.primaryWindowLabel
-            valuesString.append(NSAttributedString(string: "\(windowLabel) ", attributes: tinyLabelAttributes))
-            valuesString.append(NSAttributedString(string: "\(primary)", attributes: numberPrimaryAttributes))
-            valuesString.append(NSAttributedString(string: "%", attributes: percentPrimaryAttributes))
-        }
-
-        if !showOnly5hr {
-            if !showOnlyWeekly {
-                valuesString.append(NSAttributedString(string: "  ", attributes: tinyLabelAttributes))
-            }
-            valuesString.append(NSAttributedString(string: "W ", attributes: tinyLabelAttributes))
-            valuesString.append(NSAttributedString(string: "\(secondary)", attributes: numberSecondaryAttributes))
-            valuesString.append(NSAttributedString(string: "%", attributes: percentSecondaryAttributes))
-        }
-
-        valuesString.draw(at: NSPoint(x: (width - valuesString.size().width) / 2, y: yOffset))
-
-        if availableUpdateVersion != nil {
-            brandClaudeColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: width - 5, y: height - 5, width: 4, height: 4)).fill()
-        }
-
-        image.unlockFocus()
-        image.isTemplate = false
-        return (image, width)
-    }
-
     // MARK: - Helpers
 
     private var brandClaudeColor: NSColor {
         NSColor(red: 0.83, green: 0.53, blue: 0.30, alpha: 1.0)
-    }
-
-    private var brandCodexColor: NSColor {
-        NSColor(red: 0.14, green: 0.73, blue: 0.94, alpha: 1.0)
-    }
-
-    // Cursor's brand is monochrome: black on light menu bars, white on dark.
-    private var brandCursorColor: NSColor {
-        getDarkMode() ? .white : .black
-    }
-
-    private var brandKimiColor: NSColor {
-        NSColor(red: 0.10, green: 0.52, blue: 1.0, alpha: 1.0)
-    }
-
-    private var brandZaiColor: NSColor {
-        NSColor(red: 0.91, green: 0.35, blue: 0.42, alpha: 1.0)
-    }
-
-    /// XAI brand mark is black; flip to white on dark menu bars so it stays readable.
-    private var brandXaiColor: NSColor {
-        getDarkMode() ? NSColor.white : NSColor.black
-    }
-
-    private func usageHighlightColor(
-        percentage: Int,
-        highThreshold: Int,
-        accentColor: NSColor,
-        fallback: NSColor
-    ) -> NSColor
-    {
-        percentage >= highThreshold ? accentColor : fallback
     }
 
     private var shouldPromptClaudeAuthentication: Bool {
@@ -2490,13 +1329,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var shouldPromptCodexAuthentication: Bool {
         !viewModel.hasCodexCredentials || viewModel.codexError == APIError.unauthorized.errorDescription
-    }
-
-    private func getDarkMode() -> Bool {
-        if let button = statusItem.button {
-            return button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        }
-        return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 }
 

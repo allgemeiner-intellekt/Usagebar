@@ -1,3 +1,5 @@
+> Personal fork of [betoxf/Usagebar](https://github.com/betoxf/Usagebar). Download personal builds from [GitHub Actions](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml). See [personal requirements](.agents/skills/personal-requirements/SKILL.md) for planned interaction changes, which are not implemented yet.
+
 <div align="center">
   <img src="assets/brand/usagebar-logo.png" alt="Usagebar" width="760">
 
@@ -5,8 +7,7 @@
   <p>A free, private, native Mac app that shows your 5-hour window, weekly cap, and when each one resets, without opening a browser.</p>
 
   <p>
-    <a href="https://github.com/betoxf/Usagebar/actions/workflows/ci.yml"><img src="https://github.com/betoxf/Usagebar/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build"></a>
-    <a href="https://github.com/betoxf/Usagebar/releases/latest"><img src="https://img.shields.io/github/v/release/betoxf/Usagebar?display_name=tag&sort=semver" alt="Latest release"></a>
+    <a href="https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml"><img src="https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build"></a>
     <img src="https://img.shields.io/badge/macOS-14%2B-111827" alt="macOS 14 or newer">
     <img src="https://img.shields.io/badge/Swift-5-F05138" alt="Swift 5">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2563EB" alt="MIT license"></a>
@@ -47,20 +48,13 @@ Usage limits matter most while you are working. Usagebar keeps your Claude Code,
 
 ## Installation
 
-### Homebrew (recommended)
+### Personal builds and updates
 
-```bash
-brew install --cask betoxf/tap/usagebar
-```
+Open a successful run in [personal CI](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml) and download its artifact. Extract the artifact, verify `SHA256SUMS`, and unpack `Usagebar.zip`. Quit Usagebar, replace `/Applications/Usagebar.app`, and launch the replacement. Keep only one installed copy. An agent can assist when asked.
 
-Upgrade later with `brew update && brew upgrade --cask usagebar`.
+Builds support Apple Silicon and Intel, use ad hoc signatures, and are not notarized. macOS may require explicit approval to open them. Actions downloads require GitHub sign-in and expire after 30 days. See [cloud-build](.agents/skills/cloud-build/SKILL.md) for source verification and [Releasing](docs/RELEASING.md) for optional durable releases.
 
-### Download a release
-
-Download `Usagebar.zip` from the [latest release](https://github.com/betoxf/Usagebar/releases/latest). Quit any running Usagebar, replace `/Applications/Usagebar.app`, and launch the replacement. Do not keep or launch another copy from Downloads.
-
-> [!NOTE]
-> Current release artifacts are not notarized. The Homebrew cask clears the quarantine attribute during installation. If you prefer not to do that, build from source.
+The app's download action opens this fork's builds. It does not install Homebrew updates. `Casks/usagebar.rb` is retained as an upstream distribution reference, not a personal installer. If an older copy is managed by Homebrew, external `brew upgrade` can still overwrite a manual installation; resolve that before installing the personal build.
 
 ### Requirements
 
@@ -175,7 +169,7 @@ Report suspected vulnerabilities privately according to the [security policy](SE
 You need Xcode 26 or newer with its bundled macOS SDK.
 
 ```bash
-git clone https://github.com/betoxf/Usagebar.git
+git clone https://github.com/allgemeiner-intellekt/Usagebar.git
 cd Usagebar
 ./script/build_and_run.sh --verify
 ```
@@ -204,7 +198,7 @@ script/              local build and run entrypoint
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, data flow, credentials, and network boundaries. |
 | [Brand assets](docs/BRAND.md) | Approved identity files and usage guidance. |
 | [Contributing](CONTRIBUTING.md) | Local setup, change standards, and validation expectations. |
-| [Releasing](docs/RELEASING.md) | Versioning, artifact, tag, and Homebrew update checklist. |
+| [Releasing](docs/RELEASING.md) | Personal build artifacts and optional tagged releases. |
 | [Security](SECURITY.md) | Supported versions and private reporting process. |
 | [Code of Conduct](CODE_OF_CONDUCT.md) | Community participation expectations. |
 

@@ -9,6 +9,10 @@ Thank you for helping improve Usagebar. The project favors small, reviewable cha
 - Keep provider credentials, session cookies, account identifiers, and raw API responses out of issues, commits, screenshots, and logs.
 - Follow [SECURITY.md](SECURITY.md) for security-sensitive reports.
 
+## Personal fork workflow
+
+For this fork, follow [cloud-build](.agents/skills/cloud-build/SKILL.md) for compilation, regression checks, packaging, and artifact retrieval. Use GitHub builds for routine validation. The local commands below remain optional upstream development references, not prerequisites for personal releases. Preserve the code and privacy standards in this document.
+
 ## Development setup
 
 Requirements: Xcode 26+, the bundled macOS SDK, and Git. The app targets macOS 14+.

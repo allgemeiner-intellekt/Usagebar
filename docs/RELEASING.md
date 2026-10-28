@@ -1,55 +1,13 @@
-# Releasing Usagebar
+# Personal builds and releases
 
-Releases should start from a clean, validated `main` branch.
+Routine personal builds use the [CI workflow](../.github/workflows/ci.yml). Push to `main`, open a pull request, or manually dispatch the workflow for a pushed branch. It runs regression tests, builds a universal Release app, verifies signatures and architectures, and uploads an artifact named for the workflow commit. No release tag or Homebrew tap is required.
 
-## 1. Prepare the version
+Open [personal CI](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml), select a successful run for the intended source, and download its artifact. Follow [cloud-build](../.agents/skills/cloud-build/SKILL.md) for run matching, checksum verification, and update limitations. For pull requests, the workflow commit can be GitHub's merge commit; verify the recorded source rather than assuming it is the branch head.
 
-Update `MARKETING_VERSION` and the monotonically increasing `CURRENT_PROJECT_VERSION` in the Xcode project. Confirm the planned version is newer than the latest GitHub release. Add the user-visible changes to `CHANGELOG.md` and curated release notes to `docs/releases/vX.Y.Z.md`. Use Xcode 26 or newer.
+## Optional durable releases
 
-## 2. Validate locally
+The existing [Release workflow](../.github/workflows/release.yml) remains available when a permanent download is wanted. From validated source, update `MARKETING_VERSION` and monotonically increasing `CURRENT_PROJECT_VERSION`, add `docs/releases/vX.Y.Z.md` and a changelog entry, then push a new `vX.Y.Z` tag to the personal fork. The workflow builds and publishes `Usagebar.zip` with the curated notes to this repository's Releases.
 
-```bash
-./script/test_performance.sh
-USAGEBAR_BUILD_CONFIGURATION=Release USAGEBAR_DISABLE_AUTO_UPDATE=1 ./script/build_and_run.sh --verify
-make release
-```
+For an unpublished tag whose workflow failed, dispatch `release.yml` on `main` with its `release_tag` input. It checks out the original tag. Never move an existing published tag or replace its artifact. No upstream Homebrew tap update is part of the personal release process; `Casks/usagebar.rb` remains an upstream reference.
 
-Confirm `build/Usagebar.zip` exists, the app launches, the app icon is present in bundle metadata, relevant provider states render, and no credentials appear in logs or artifacts.
-
-## 3. Tag the release
-
-```bash
-git tag -a vX.Y.Z -m "Usagebar X.Y.Z"
-git push origin vX.Y.Z
-```
-
-The `Release` workflow runs regression tests, builds a universal Apple silicon/Intel `Usagebar.zip`, verifies the version/tag and signature integrity, and publishes the matching curated notes. The current distribution uses ad hoc signing and is not notarized.
-
-If a workflow failure happens before the release artifact is published, fix the workflow on `main` and retry the existing tag without moving it:
-
-```bash
-gh workflow run release.yml --ref main -f release_tag=vX.Y.Z
-```
-
-The retry checks out the original tag and uses its app version and release notes. Use this only for an unpublished release; do not replace an already published artifact and invalidate its checksum.
-
-## 4. Verify the published artifact
-
-Download the GitHub artifact, inspect it, launch it on a clean account when possible, and calculate its published hash:
-
-```bash
-shasum -a 256 Usagebar.zip
-```
-
-## 5. Update Homebrew
-
-Update `version` and `sha256` in `Casks/usagebar.rb` in both this repository and `betoxf/homebrew-tap`. Keep `cask_renames.json` in the Homebrew tap so existing `justausagebar` installs migrate to the canonical `usagebar` token. Use the hash of the artifact downloaded from GitHub, not a separately built local archive.
-
-Verify `brew upgrade --cask usagebar`, then confirm all of the following:
-
-- exactly one `Usagebar` process is running from `/Applications/Usagebar.app`;
-- the installed bundle reports the new version and `LSMultipleInstancesProhibited = true`;
-- Homebrew's Caskroom contains only the current Usagebar version;
-- `brew info --cask justausagebar` resolves through the rename instead of exposing a second cask.
-
-Run `brew style Casks/usagebar.rb`, review release notes for accuracy and secret leakage, and never move an existing version tag after publication.
+Both distribution paths use ad hoc signing and are not notarized. Cloud checks establish build and packaging status. User interaction and launch behavior require separate runtime verification when implementing product changes.

@@ -92,7 +92,7 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | Kimi Code usage | `https://api.kimi.com/coding/v1/usages` |
 | Kimi Code OAuth refresh | `https://auth.kimi.com/api/oauth/token` |
 | Kimi web-token usage fallback | `https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages` |
-| Update discovery | `https://api.github.com/repos/betoxf/Usagebar/releases/latest` |
+| Personal updates | Opens `https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml` in the browser; background release discovery is disabled |
 | z.ai quota | `https://api.z.ai/api/monitor/usage/quota/limit` |
 | XAI / Grok Build billing | `https://cli-chat-proxy.grok.com/v1/billing?format=credits` |
 | XAI OIDC refresh | `https://auth.x.ai/oauth2/token` |
@@ -110,7 +110,7 @@ A configured Codex base URL changes the Codex usage destination. Provider-privat
 
 Usagebar-managed credential data uses AES-256-GCM with a key derived from the Mac hardware UUID and an application salt.
 
-Homebrew updates use a quit-first handoff. Usagebar checks release and cask state while running, starts its bundled update helper, and terminates before Homebrew replaces the app. The cask quits any remaining old process and opens the installed replacement. The bundle also prohibits multiple instances, so a second copy cannot create another status item.
+Personal builds use manual updates from the fork’s Actions artifacts. `AppDelegate.manualUpdatesOnly` disables background release discovery and gates the update execution path, including any saved automatic-update preference. The menu opens the personal build page. The upstream Homebrew implementation and bundled helper remain in source for upstream compatibility but are not invoked in this fork. The bundle prohibits multiple instances. External Homebrew upgrades remain outside this safeguard.
 
 The primary interface is AppKit for precise status-item drawing; SwiftUI is used for settings and authentication. The app runs as `LSUIElement`, so it has no normal Dock icon while running, but the application icon remains visible in Finder and installation surfaces.
 

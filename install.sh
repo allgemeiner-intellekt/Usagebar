@@ -1,33 +1,8 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo ""
-echo "  Usagebar - Installer"
-echo "  ============================="
-echo ""
-
-# Check for Homebrew
-if command -v brew &>/dev/null; then
-    echo "  [+] Homebrew found"
-    echo "  [*] Installing via Homebrew..."
-    brew install --cask betoxf/tap/usagebar
-    echo ""
-    echo "  Done! Usagebar has been installed."
-    echo ""
-    echo "  To launch:  open -a Usagebar"
-    echo "  To update:  brew upgrade --cask usagebar"
-    echo "  To remove:  brew uninstall --cask usagebar"
-    echo ""
-else
-    echo "  [!] Homebrew not found."
-    echo ""
-    echo "  Option 1: Install Homebrew first, then re-run this script:"
-    echo '    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-    echo ""
-    echo "  Option 2: Build from source:"
-    echo "    git clone https://github.com/betoxf/Usagebar.git"
-    echo "    cd Usagebar && make release"
-    echo "    cp -R build/Release/Usagebar.app /Applications/"
-    echo ""
-    exit 1
-fi
+echo 'Personal Usagebar builds are installed manually from GitHub Actions:'
+echo 'https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml'
+echo 'Download a successful run artifact and verify its SHA256SUMS and build-info.txt.'
+echo 'Quit Usagebar, unpack Usagebar.zip, and replace /Applications/Usagebar.app.'
+echo 'This script does not install, launch, or update a Homebrew package.'

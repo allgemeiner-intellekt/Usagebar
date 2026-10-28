@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -29,13 +30,14 @@ jobs:
           xcodebuild \
             -project JustaUsageBar.xcodeproj \
             -scheme JustaUsageBar \
-            -configuration Debug \
+            -configuration Release \
             -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
+            -destination 'generic/platform=macOS' \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=- \
             build
       - name: Verify install and update safeguards
         run: |
-          app="build/DerivedData/Build/Products/Debug/Usagebar.app"
+          app="build/DerivedData/Build/Products/Release/Usagebar.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$app/Contents/Info.plist")" = "true"
           test -f "$app/Contents/Resources/install_update_and_relaunch.sh"
           test ! -e Casks/justausagebar.rb
@@ -43,3 +45,12 @@ jobs:
           ruby -rjson -e 'abort unless JSON.parse(File.read("cask_renames.json")) == {"justausagebar" => "usagebar"}'
       - name: Run performance and rendering regression tests
         run: ./script/test_performance.sh
+      - name: Package personal build
+        run: bash script/package_artifact.sh
+      - name: Upload personal build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Usagebar-macos-universal-${{ github.sha }}
+          path: build/Artifact/
+          if-no-files-found: error
+          retention-days: 30

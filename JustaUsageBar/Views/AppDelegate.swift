@@ -11,8 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     nonisolated private static let lastLaunchedAppDescriptorDefaultsKey = "lastLaunchedAppDescriptor"
     nonisolated private static let lastUpdateCheckAtDefaultsKey = "lastUpdateCheckAt"
     nonisolated private static let lastInstalledUpdateAtDefaultsKey = "lastInstalledUpdateAt"
-    nonisolated private static let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/betoxf/Usagebar/releases/latest")!
-    nonisolated private static let repositoryURL = URL(string: "https://github.com/betoxf/Usagebar")!
+    nonisolated private static let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/allgemeiner-intellekt/Usagebar/releases/latest")!
+    nonisolated private static let repositoryURL = URL(string: "https://github.com/allgemeiner-intellekt/Usagebar")!
+    // Personal builds are replaced manually from the fork's Actions artifacts.
+    nonisolated private static let manualUpdatesOnly = true
+    nonisolated private static let personalBuildsURL = URL(string: "https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml")!
     nonisolated private static let updateFailureFileName = "update-failure.txt"
 
     private var statusItem: NSStatusItem!
@@ -283,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Piggybacks on the regular refresh cycle: at most one release lookup
     /// every `releaseCheckInterval`, a single HTTPS request, no timers.
     private func maybeCheckForUpdateInBackground() {
+        guard !Self.manualUpdatesOnly else { return }
         let last = lastReleaseCheckAt
             ?? UserDefaults.standard.object(forKey: Self.lastUpdateCheckAtDefaultsKey) as? Date
         if let last, Date().timeIntervalSince(last) < Self.releaseCheckInterval {
@@ -617,16 +621,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             menu.addItem(updateItem)
         } else {
-            let updateItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "u")
+            let updateItem = NSMenuItem(title: "Download Personal Build…", action: #selector(checkForUpdates), keyEquivalent: "u")
             updateItem.target = self
             menu.addItem(updateItem)
         }
-
-        // Auto update toggle
-        let autoUpdateItem = NSMenuItem(title: "Update Automatically", action: #selector(toggleAutoUpdate), keyEquivalent: "")
-        autoUpdateItem.target = self
-        autoUpdateItem.state = viewModel.autoUpdate ? .on : .off
-        menu.addItem(autoUpdateItem)
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
@@ -1096,6 +1094,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func runUpdate(interactive: Bool) {
+        guard !Self.manualUpdatesOnly else {
+            if interactive {
+                NSWorkspace.shared.open(Self.personalBuildsURL)
+            }
+            return
+        }
         guard !isUpdateRunning else { return }
         isUpdateRunning = true
 

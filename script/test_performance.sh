@@ -35,6 +35,13 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O 
 cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/AppDelegate.swift" \
   "$ROOT_DIR/Tests/StatusRenderingTests.swift" > "$TEST_DIR/RenderingTests.swift"
+# Use the built asset catalog when CI has compiled the app, so previews include
+# the same provider marks as the shipped panel.
+assets="$ROOT_DIR/build/DerivedData/Build/Products/Release/Usagebar.app/Contents/Resources/Assets.car"
+if [[ -f "$assets" ]]; then
+  mkdir -p "$TEST_APP/Contents/Resources"
+  cp "$assets" "$TEST_APP/Contents/Resources/Assets.car"
+fi
 xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
   "$ROOT_DIR"/JustaUsageBar/Models/*.swift \
   "$ROOT_DIR"/JustaUsageBar/Services/*.swift \

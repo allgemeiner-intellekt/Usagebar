@@ -37,7 +37,7 @@ extension AppDelegate {
         precondition(statusItem.length == NSStatusItem.squareLength, "Status item must use a standard square slot")
         precondition(button.imagePosition == .imageOnly && button.title.isEmpty, "Status item contains usage text")
         precondition(button.accessibilityLabel() == "Usagebar", "Status icon lost its accessible name")
-        let clickMask = NSEvent.EventTypeMask(rawValue: UInt(button.sendAction(on: [.leftMouseUp, .rightMouseUp])))
+        let clickMask = NSEvent.EventTypeMask(rawValue: UInt64(button.sendAction(on: [.leftMouseUp, .rightMouseUp])))
         precondition(clickMask.contains(.leftMouseUp) && clickMask.contains(.rightMouseUp), "Both clicks must open the panel")
 
         for providers: Set<DisplayProvider> in [[], [.claude], [.codex], [.claude, .codex]] {
@@ -101,6 +101,7 @@ extension AppDelegate {
         let sheet = NSImage(size: NSSize(width: 720, height: 460))
         for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
             let dark = column == 1
+            let originX = CGFloat(column) * 360
             let theme = NSAppearance(named: appearance)!
             button.appearance = theme
             precondition(button.image === icon, "Appearance change rebuilt the fixed icon")
@@ -127,15 +128,15 @@ extension AppDelegate {
 
             sheet.lockFocus()
             (dark ? NSColor(white: 0.12, alpha: 1) : .white).setFill()
-            NSRect(x: column * 360, y: 0, width: 360, height: 460).fill()
+            NSRect(x: originX, y: 0, width: 360, height: 460).fill()
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 12),
                 .foregroundColor: dark ? NSColor.white : NSColor.black
             ]
             NSAttributedString(string: dark ? "Dark appearance" : "Light appearance", attributes: attrs)
-                .draw(at: NSPoint(x: column * 360 + 44, y: 420))
-            iconImage.draw(at: NSPoint(x: column * 360 + 12, y: 414), from: .zero, operation: .sourceOver, fraction: 1)
-            panelImage.draw(at: NSPoint(x: column * 360 + 10, y: 405 - panelImage.size.height), from: .zero, operation: .sourceOver, fraction: 1)
+                .draw(at: NSPoint(x: originX + 44, y: 420))
+            iconImage.draw(at: NSPoint(x: originX + 12, y: 414), from: .zero, operation: .sourceOver, fraction: 1)
+            panelImage.draw(at: NSPoint(x: originX + 10, y: 405 - panelImage.size.height), from: .zero, operation: .sourceOver, fraction: 1)
             sheet.unlockFocus()
         }
         if let tiff = sheet.tiffRepresentation,
@@ -154,6 +155,11 @@ struct StatusRenderingTests {
         }
         UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests")
         defer { UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests") }
+        // Legacy display preferences must not hide the icon or enable rotation.
+        UserDefaults.standard.set(false, forKey: "showIcon")
+        UserDefaults.standard.set(0.01, forKey: "animationInterval")
+        UserDefaults.standard.set(true, forKey: "followActiveApp")
+        UserDefaults.standard.set("codex", forKey: "preferredDisplayProvider")
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let model = UsageViewModel(startAutomatically: false)

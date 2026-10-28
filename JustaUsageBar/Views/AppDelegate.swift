@@ -223,49 +223,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let displayMenu = NSMenu()
 
             // Provider toggles
-            let authedProviderCount = [hasClaude, hasCodex, hasCursor, hasKimi, hasZai, hasXai].filter { $0 }.count
-            if authedProviderCount > 0 {
-                if hasClaude {
-                    let claudeToggle = NSMenuItem(title: "Show Claude", action: #selector(toggleShowClaude), keyEquivalent: "")
-                    claudeToggle.target = self
-                    claudeToggle.state = viewModel.showClaude ? .on : .off
-                    displayMenu.addItem(claudeToggle)
-                }
+            if hasClaude {
+                let claudeToggle = NSMenuItem(title: "Show Claude", action: #selector(toggleShowClaude), keyEquivalent: "")
+                claudeToggle.target = self
+                claudeToggle.state = viewModel.showClaude ? .on : .off
+                displayMenu.addItem(claudeToggle)
+            }
 
-                if hasCodex {
-                    let codexToggle = NSMenuItem(title: "Show Codex", action: #selector(toggleShowCodex), keyEquivalent: "")
-                    codexToggle.target = self
-                    codexToggle.state = viewModel.showCodex ? .on : .off
-                    displayMenu.addItem(codexToggle)
-                }
+            if hasCodex {
+                let codexToggle = NSMenuItem(title: "Show Codex", action: #selector(toggleShowCodex), keyEquivalent: "")
+                codexToggle.target = self
+                codexToggle.state = viewModel.showCodex ? .on : .off
+                displayMenu.addItem(codexToggle)
+            }
 
-                if hasCursor {
-                    let cursorToggle = NSMenuItem(title: "Show Cursor", action: #selector(toggleShowCursor), keyEquivalent: "")
-                    cursorToggle.target = self
-                    cursorToggle.state = viewModel.showCursor ? .on : .off
-                    displayMenu.addItem(cursorToggle)
-                }
+            if hasCursor {
+                let cursorToggle = NSMenuItem(title: "Show Cursor", action: #selector(toggleShowCursor), keyEquivalent: "")
+                cursorToggle.target = self
+                cursorToggle.state = viewModel.showCursor ? .on : .off
+                displayMenu.addItem(cursorToggle)
+            }
 
-                if hasKimi {
-                    let kimiToggle = NSMenuItem(title: "Show KimiCode", action: #selector(toggleShowKimi), keyEquivalent: "")
-                    kimiToggle.target = self
-                    kimiToggle.state = viewModel.showKimi ? .on : .off
-                    displayMenu.addItem(kimiToggle)
-                }
+            if hasKimi {
+                let kimiToggle = NSMenuItem(title: "Show KimiCode", action: #selector(toggleShowKimi), keyEquivalent: "")
+                kimiToggle.target = self
+                kimiToggle.state = viewModel.showKimi ? .on : .off
+                displayMenu.addItem(kimiToggle)
+            }
 
-                if hasZai {
-                    let zaiToggle = NSMenuItem(title: "Show z.ai", action: #selector(toggleShowZai), keyEquivalent: "")
-                    zaiToggle.target = self
-                    zaiToggle.state = viewModel.showZai ? .on : .off
-                    displayMenu.addItem(zaiToggle)
-                }
+            if hasZai {
+                let zaiToggle = NSMenuItem(title: "Show z.ai", action: #selector(toggleShowZai), keyEquivalent: "")
+                zaiToggle.target = self
+                zaiToggle.state = viewModel.showZai ? .on : .off
+                displayMenu.addItem(zaiToggle)
+            }
 
-                if hasXai {
-                    let xaiToggle = NSMenuItem(title: "Show XAI", action: #selector(toggleShowXai), keyEquivalent: "")
-                    xaiToggle.target = self
-                    xaiToggle.state = viewModel.showXai ? .on : .off
-                    displayMenu.addItem(xaiToggle)
-                }
+            if hasXai {
+                let xaiToggle = NSMenuItem(title: "Show XAI", action: #selector(toggleShowXai), keyEquivalent: "")
+                xaiToggle.target = self
+                xaiToggle.state = viewModel.showXai ? .on : .off
+                displayMenu.addItem(xaiToggle)
             }
 
             let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")

@@ -26,7 +26,11 @@ struct UsagePanelCard: Identifiable {
     var message: String?
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
+    var bankedResets: CodexBankedResets?
     var id: DisplayProvider { provider }
+
+    var showsBankedResets: Bool { bankedResets.map { $0.availableCount > 0 } ?? false }
+    var resetInventoryUnavailable: Bool { provider == .codex && !rows.isEmpty && bankedResets == nil }
 }
 
 /// What the panel shows. `AppDelegate` fills it from the normalized usage
@@ -71,7 +75,7 @@ struct UsagePanelView: View {
             }
             footer
         }
-        .padding(10)
+        .padding(8)
         .frame(width: 340)
         .font(.system(size: 13))
     }
@@ -132,13 +136,14 @@ struct UsagePanelView: View {
     }
 }
 
-private struct UsagePanelCardView: View {
+struct UsagePanelCardView: View {
     let card: UsagePanelCard
     @ObservedObject var model: UsagePanelModel
     @Environment(\.colorScheme) private var colorScheme
+    @State private var showsResetDetails = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 mark
                 if !card.detail.isEmpty {
@@ -148,15 +153,37 @@ private struct UsagePanelCardView: View {
                         .padding(.leading, 2)
                 }
                 Spacer(minLength: 4)
+                if card.showsBankedResets, let resets = card.bankedResets {
+                    Button {
+                        showsResetDetails.toggle()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("\(resets.availableCount) banked \(resets.availableCount == 1 ? "reset" : "resets")")
+                            Image(systemName: "chevron.down").font(.system(size: 9))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .help("View banked reset expiration dates")
+                    .accessibilityIdentifier("banked-reset-details")
+                    .popover(isPresented: $showsResetDetails, arrowEdge: .bottom) {
+                        BankedResetDetailsView(resets: resets)
+                    }
+                } else if card.resetInventoryUnavailable {
+                    Text("Resets unavailable")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(height: 18)
 
             ForEach(card.rows) { row in
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     Text(row.label)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .frame(width: 38, alignment: .leading)
+                        .frame(width: 28, alignment: .leading)
                     UsageMeter(percent: row.percent, fill: meterColor)
                     Text("\(row.percent)%")
                         .fontWeight(.semibold)
@@ -167,6 +194,10 @@ private struct UsagePanelCardView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 58, alignment: .trailing)
                 }
+            }
+
+            if card.showsBankedResets, let resets = card.bankedResets {
+                BankedResetSummaryView(resets: resets)
             }
 
             if let message = card.message {
@@ -182,7 +213,8 @@ private struct UsagePanelCardView: View {
                     .font(.system(size: 12))
             }
         }
-        .padding(EdgeInsets(top: 10, leading: 12, bottom: 11, trailing: 12))
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -192,6 +224,7 @@ private struct UsagePanelCardView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(stroke, lineWidth: 1)
         )
+        .onChange(of: card.bankedResets) { _, _ in showsResetDetails = false }
     }
 
     @ViewBuilder private var mark: some View {
@@ -244,6 +277,72 @@ private struct UsagePanelCardView: View {
 
     private var stroke: Color {
         colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.07)
+    }
+}
+
+struct BankedResetSummaryView: View {
+    let resets: CodexBankedResets
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text(resets.expirations == nil ? "Expires" : "Next expiry")
+            Spacer(minLength: 0)
+            if let first = resets.expirationGroups.first {
+                switch first.expiration {
+                case .at(let date):
+                    Text(date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                        .help(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))
+                case .doesNotExpire:
+                    Text("Does not expire")
+                case .unknown:
+                    Text("Unavailable")
+                }
+                if resets.availableCount > first.count {
+                    Text("· +\(resets.availableCount - first.count)")
+                }
+            } else {
+                Text("Unavailable")
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct BankedResetDetailsView: View {
+    let resets: CodexBankedResets
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Banked resets").fontWeight(.semibold)
+            if resets.expirations == nil {
+                Text("Expiration dates are unavailable. Refresh to try again.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(resets.expirationGroups) { group in
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text("\(group.count) \(group.count == 1 ? "reset" : "resets")")
+                        Spacer(minLength: 0)
+                        switch group.expiration {
+                        case .at(let date):
+                            Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute().timeZone())
+                                .multilineTextAlignment(.trailing)
+                        case .doesNotExpire:
+                            Text("Does not expire")
+                        case .unknown:
+                            Text("Expiration unavailable")
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .monospacedDigit()
+        .padding(12)
+        .frame(width: 310, alignment: .leading)
     }
 }
 

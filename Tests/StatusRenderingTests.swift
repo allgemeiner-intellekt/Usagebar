@@ -97,6 +97,32 @@ extension AppDelegate {
         precondition(viewModel.showCodex, "Display switches hid every authenticated provider")
         viewModel.showClaude = true
 
+        let expiry = ISO8601Timestamp.date(from: "2026-11-06T15:59:00Z")!
+        let later = ISO8601Timestamp.date(from: "2026-11-30T15:59:00Z")!
+        let inventory = CodexBankedResets(availableCount: 3, expirations: [.at(later), .at(expiry), .at(expiry)])
+        viewModel.codexUsageData = CodexUsageData(
+            planType: "pro", primaryUsedPercent: 34, primaryWindowSeconds: 604800,
+            bankedResets: inventory
+        )
+        let codexCard = panelCards().first { $0.provider == .codex }!
+        let claudeCard = panelCards().first { $0.provider == .claude }!
+        precondition(codexCard.bankedResets == inventory && codexCard.showsBankedResets)
+        precondition(codexCard.rows.count == 1, "Weekly primary must not duplicate its secondary window")
+        func cardHeight(_ card: UsagePanelCard) -> CGFloat {
+            let hosting = NSHostingView(rootView: UsagePanelCardView(card: card, model: panelModel).frame(width: 324))
+            return hosting.fittingSize.height
+        }
+        precondition(abs(cardHeight(codexCard) - cardHeight(claudeCard)) < 4,
+                     "Banked reset summary should occupy the same height as a second usage row")
+        var emptyCard = codexCard
+        emptyCard.bankedResets = CodexBankedResets(availableCount: 0, expirations: [])
+        precondition(!emptyCard.showsBankedResets && !emptyCard.resetInventoryUnavailable)
+        precondition(cardHeight(emptyCard) < cardHeight(codexCard) - 10, "Zero resets must leave no blank summary row")
+        var unavailableCard = codexCard
+        unavailableCard.bankedResets = nil
+        precondition(!unavailableCard.showsBankedResets && unavailableCard.resetInventoryUnavailable,
+                     "Failed inventory must remain distinct from zero resets")
+
         guard let output else { return }
         let sheet = NSImage(size: NSSize(width: 720, height: 460))
         for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
@@ -144,12 +170,36 @@ extension AppDelegate {
             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try png.write(to: output)
         }
+        // Render the real detail view in both appearances, using fixture dates only.
+        let detailSheet = NSImage(size: NSSize(width: 660, height: 160))
+        for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
+            let dark = column == 1
+            let host = NSHostingView(rootView: BankedResetDetailsView(resets: inventory)
+                .environment(\.colorScheme, dark ? .dark : .light))
+            host.appearance = NSAppearance(named: appearance)!
+            host.setFrameSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let preview = NSImage(size: host.bounds.size)
+            preview.addRepresentation(bitmap)
+            detailSheet.lockFocus()
+            (dark ? NSColor(white: 0.16, alpha: 1) : .white).setFill()
+            NSRect(x: CGFloat(column) * 330, y: 0, width: 330, height: 160).fill()
+            preview.draw(at: NSPoint(x: CGFloat(column) * 330 + 10, y: 150 - preview.size.height),
+                         from: .zero, operation: .sourceOver, fraction: 1)
+            detailSheet.unlockFocus()
+        }
+        if let tiff = detailSheet.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try png.write(to: output.deletingLastPathComponent().appendingPathComponent("banked-reset-details-preview.png"))
+        }
     }
 }
 
 @main
 struct StatusRenderingTests {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         guard Bundle.main.bundleIdentifier == "dev.usagebar.performance-tests" else {
             fatalError("Tests require their isolated preferences domain")
         }
@@ -162,6 +212,7 @@ struct StatusRenderingTests {
         UserDefaults.standard.set("codex", forKey: "preferredDisplayProvider")
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
+        try await CodexAPIService.verifyBankedResets()
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
         try AppDelegate(viewModel: model).verifyRendering(output: output)

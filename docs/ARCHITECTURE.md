@@ -84,6 +84,7 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | Claude OAuth refresh | `https://platform.claude.com/v1/oauth/token` |
 | Claude browser-session usage | `https://claude.ai/api/organizations/{orgId}/usage` |
 | Codex usage | `https://chatgpt.com/backend-api/wham/usage` |
+| Codex banked reset inventory (GET only) | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
 | Codex OAuth refresh | `https://auth.openai.com/oauth/token` |
 | Cursor weekly allowance | `https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus` |
 | Kimi Code usage | `https://api.kimi.com/coding/v1/usages` |
@@ -95,6 +96,10 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | XAI OIDC refresh | `https://auth.x.ai/oauth2/token` |
 
 A configured Codex base URL changes the Codex usage destination. Provider-private endpoints or payloads can change independently.
+
+Codex refreshes banked reset inventory with the same credentials and refresh cadence as usage. A configured base URL uses the sibling `/api/codex/rate-limit-reset-credits` path. This integration only reads inventory; it cannot redeem resets. It does not store inventory, account identifiers, profile metadata, or raw responses. A failed inventory request preserves usage and any count supplied by the usage response, while showing expiration details as unavailable. Inventory HTTP 429 responses keep their own `Retry-After` deadline, including across manual refreshes, without preventing ordinary usage updates. Cancellation still cancels the provider refresh.
+
+The Codex card uses a compact summary: a positive banked reset count in the title row and the nearest expiration below its usage meter. Clicking the count opens all expiration groups, sorted by date, with quantities, years, local times, and time zones. Explicitly non-expiring resets and missing dates have separate labels. A confirmed zero count hides both count and summary; unavailable inventory remains distinct from zero. Card spacing is reduced without reducing text size, so a weekly Codex meter plus reset summary uses the same height as two ordinary usage meters. The fixed menu-bar icon and other provider information are unchanged.
 
 ## Local persistence
 

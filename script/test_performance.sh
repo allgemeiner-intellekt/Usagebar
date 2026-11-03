@@ -34,7 +34,13 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O 
 # source file for private-state assertions; no production code is rewritten.
 cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/AppDelegate.swift" \
+  "$ROOT_DIR/JustaUsageBar/Services/CodexAPIService.swift" \
+  "$ROOT_DIR/Tests/CodexBankedResetTests.swift" \
   "$ROOT_DIR/Tests/StatusRenderingTests.swift" > "$TEST_DIR/RenderingTests.swift"
+services=()
+for source in "$ROOT_DIR"/JustaUsageBar/Services/*.swift; do
+  [[ "$source" == */CodexAPIService.swift ]] || services+=("$source")
+done
 # Use the built asset catalog when CI has compiled the app, so previews include
 # the same provider marks as the shipped panel.
 assets="$ROOT_DIR/build/DerivedData/Build/Products/Release/Usagebar.app/Contents/Resources/Assets.car"
@@ -44,7 +50,7 @@ if [[ -f "$assets" ]]; then
 fi
 xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
   "$ROOT_DIR"/JustaUsageBar/Models/*.swift \
-  "$ROOT_DIR"/JustaUsageBar/Services/*.swift \
+  "${services[@]}" \
   "$ROOT_DIR/JustaUsageBar/Views/AuthWebView.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/PopoverView.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/SettingsView.swift" \

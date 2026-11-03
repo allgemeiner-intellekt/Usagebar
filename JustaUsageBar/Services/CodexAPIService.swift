@@ -19,6 +19,7 @@ nonisolated struct CodexUsageData {
     var hasCredits: Bool = false
     var creditBalance: Double?
     var isUnlimited: Bool = false
+    var bankedResets: CodexBankedResets?
 
     /// True once Codex's primary window is the weekly one (the old 5h window
     /// was retired upstream); the separate secondary weekly is redundant then.
@@ -59,6 +60,64 @@ nonisolated struct CodexUsageData {
     static let placeholder = CodexUsageData()
 }
 
+/// Reset inventory is separate from purchased credits and ordinary usage windows.
+nonisolated struct CodexBankedResets: Equatable {
+    enum Expiration: Hashable {
+        case at(Date)
+        case doesNotExpire
+        case unknown
+    }
+
+    let availableCount: Int
+    /// Nil means only the usage endpoint's count was available.
+    var expirations: [Expiration]?
+
+    struct ExpirationGroup: Identifiable {
+        let expiration: Expiration
+        let count: Int
+        var id: Expiration { expiration }
+    }
+
+    var expirationGroups: [ExpirationGroup] {
+        Dictionary(grouping: expirations ?? [], by: { $0 }).map {
+            ExpirationGroup(expiration: $0.key, count: $0.value.count)
+        }.sorted { lhs, rhs in
+            switch (lhs.expiration, rhs.expiration) {
+            case let (.at(left), .at(right)): return left < right
+            case (.at, _), (.doesNotExpire, .unknown): return true
+            default: return false
+            }
+        }
+    }
+
+    static func parse(_ data: Data) throws -> CodexBankedResets {
+        let count = try JSONDecoder().decode(CountPayload.self, from: data).availableCount
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], count >= 0,
+              let credits = json["credits"] as? [[String: Any]] else {
+            throw APIError.decodingError(NSError(domain: "Codex", code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid reset inventory"]))
+        }
+        let expirations: [Expiration] = credits.compactMap { credit in
+            guard credit["status"] as? String == "available" else { return nil }
+            if credit["expires_at"] is NSNull { return .doesNotExpire }
+            if let timestamp = credit["expires_at"] as? String,
+               let date = ISO8601Timestamp.date(from: timestamp) {
+                return .at(date)
+            }
+            return .unknown
+        }
+        // The server's count is authoritative. Incomplete details must not invent
+        // expiry dates or show historical resets as currently available.
+        return CodexBankedResets(availableCount: count,
+                                expirations: expirations.count == count ? expirations : nil)
+    }
+
+    private struct CountPayload: Decodable {
+        let availableCount: Int
+        enum CodingKeys: String, CodingKey { case availableCount = "available_count" }
+    }
+}
+
 // MARK: - Codex API Service
 
 @ProviderActor
@@ -79,8 +138,14 @@ final class CodexAPIService {
     private var cachedCredentials: CodexCredentials?
     private var lastCredentialCheck: Date?
     private let credentialCacheTTL: TimeInterval = 300
+    private var resetInventoryRetryAt: Date?
+    private let sendRequest: @ProviderActor (URLRequest) async throws -> (Data, URLResponse)
 
-    private init() {}
+    private init(sendRequest: @escaping @ProviderActor (URLRequest) async throws -> (Data, URLResponse) = {
+        try await ProviderHTTP.data(for: $0)
+    }) {
+        self.sendRequest = sendRequest
+    }
 
     // MARK: - Credential Discovery
 
@@ -185,7 +250,7 @@ final class CodexAPIService {
             request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         }
 
-        let (data, response) = try await ProviderHTTP.data(for: request)
+        let (data, response) = try await sendRequest(request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.unknown(0)
@@ -193,7 +258,7 @@ final class CodexAPIService {
 
         switch httpResponse.statusCode {
         case 200:
-            return try parseCodexUsageResponse(data)
+            return try await fetchResetInventory(usage: parseCodexUsageResponse(data), request: request)
         case 429:
             throw APIError.rateLimited(retryAfter: HTTPRetryAfter.date(from: httpResponse))
         case 401, 403:
@@ -203,7 +268,7 @@ final class CodexAPIService {
                     cachedCredentials = newCreds
                     var retryRequest = request
                     retryRequest.setValue("Bearer \(newCreds.accessToken)", forHTTPHeaderField: "Authorization")
-                    let (retryData, retryResponse) = try await ProviderHTTP.data(for: retryRequest)
+                    let (retryData, retryResponse) = try await sendRequest(retryRequest)
                     if let http = retryResponse as? HTTPURLResponse, http.statusCode == 429 {
                         throw APIError.rateLimited(retryAfter: HTTPRetryAfter.date(from: http))
                     }
@@ -211,7 +276,7 @@ final class CodexAPIService {
                         clearCache()
                         throw APIError.unauthorized
                     }
-                    return try parseCodexUsageResponse(retryData)
+                    return try await fetchResetInventory(usage: parseCodexUsageResponse(retryData), request: retryRequest)
                 } catch let error as APIError where error.isRateLimited {
                     throw error
                 } catch let error where isRequestCancelled(error) {
@@ -225,6 +290,32 @@ final class CodexAPIService {
             throw APIError.unauthorized
         default:
             throw APIError.unknown(httpResponse.statusCode)
+        }
+    }
+
+    /// Best-effort, read-only inventory. A failure must not discard valid usage.
+    private func fetchResetInventory(usage: CodexUsageData, request: URLRequest) async throws -> CodexUsageData {
+        guard !Task.isCancelled else { throw CancellationError() }
+        guard resetInventoryRetryAt.map({ $0 <= Date() }) ?? true,
+              let usageURL = request.url else { return usage }
+        var request = request
+        request.url = usageURL.deletingLastPathComponent().appendingPathComponent("rate-limit-reset-credits")
+        do {
+            let (data, response) = try await sendRequest(request)
+            try Task.checkCancellation()
+            guard let http = response as? HTTPURLResponse else { return usage }
+            if http.statusCode == 429 {
+                resetInventoryRetryAt = HTTPRetryAfter.date(from: http) ?? Date().addingTimeInterval(120)
+                return usage
+            }
+            guard http.statusCode == 200 else { return usage }
+            var usage = usage
+            usage.bankedResets = try CodexBankedResets.parse(data)
+            resetInventoryRetryAt = nil
+            return usage
+        } catch {
+            if isRequestCancelled(error) || Task.isCancelled { throw CancellationError() }
+            return usage
         }
     }
 
@@ -247,7 +338,7 @@ final class CodexAPIService {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await ProviderHTTP.data(for: request)
+        let (data, response) = try await sendRequest(request)
 
         if let http = response as? HTTPURLResponse, http.statusCode == 429 {
             throw APIError.rateLimited(retryAfter: HTTPRetryAfter.date(from: http))
@@ -278,6 +369,10 @@ final class CodexAPIService {
 
         var usage = CodexUsageData()
         usage.planType = json["plan_type"] as? String ?? "unknown"
+        if let resets = json["rate_limit_reset_credits"] as? [String: Any],
+           let count = resets["available_count"] as? Int, count >= 0 {
+            usage.bankedResets = CodexBankedResets(availableCount: count)
+        }
 
         if let rateLimit = json["rate_limit"] as? [String: Any] {
             if let primary = rateLimit["primary_window"] as? [String: Any] {

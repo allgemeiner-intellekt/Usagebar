@@ -419,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let error = viewModel.codexError
                 cards.append(UsagePanelCard(
                     provider: .codex, detail: detail, rows: rows, message: error,
-                    actionTitle: error != nil && shouldPromptCodexAuthentication ? "How to authenticate Codex" : nil
+                    actionTitle: error != nil && shouldPromptCodexAuthentication ? "How to authenticate Codex" : nil,
+                    bankedResets: codex.bankedResets
                 ))
             } else {
                 cards.append(UsagePanelCard(

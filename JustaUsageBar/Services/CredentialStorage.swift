@@ -90,8 +90,7 @@ final class CredentialStorage {
         }
     }
 
-    var kimiCredential: String?
-        var cpaConnection: CPAConnection? {
+    var kimiCredential: String? {
         get { cachedCredentials?.kimiCredential }
         set {
             if cachedCredentials == nil {

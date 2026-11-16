@@ -522,6 +522,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func configurePanelActions() {
+        panelModel.onResize = { [weak self] in
+            DispatchQueue.main.async { self?.panel.fitContent() }
+        }
         panelModel.onAction = { [weak self] provider in
             self?.panel.close()
             switch provider {

@@ -8,6 +8,15 @@ import Foundation
     static var failDiscovery = false
     static var failQuota = false
     static var delay: UInt64 = 0
+    static var quotaDelay: UInt64 = 0
+    static var quotaEntered = false
+    static var quotaWaiter: CheckedContinuation<Void, Never>?
+    static var inventoryLimited = false
+
+    static func waitForQuota() async {
+        if quotaEntered { return }
+        await withCheckedContinuation { quotaWaiter = $0 }
+    }
     static var files: [[String: Any]] = [
         ["auth_index": "b", "name": "second", "provider": "codex"],
         ["auth_index": "a", "name": "first", "provider": "codex", "id_token": ["chatgpt_account_id": "workspace-a"]],
@@ -16,7 +25,7 @@ import Foundation
     ]
     static func reset() {
         requests = []; legacy = false; reject = false; empty = false
-        failDiscovery = false; failQuota = false; delay = 0
+        failDiscovery = false; failQuota = false; delay = 0; quotaDelay = 0; quotaEntered = false; inventoryLimited = false
     }
     static func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
         requests.append(request)
@@ -31,6 +40,11 @@ import Foundation
             body = ["files": empty ? [] : files]
         } else {
             let payload = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            if quotaDelay > 0 {
+                quotaEntered = true
+                quotaWaiter?.resume(); quotaWaiter = nil
+                try? await Task.sleep(nanoseconds: quotaDelay)
+            }
             precondition(payload["method"] as? String == "GET")
             precondition(["a", "b"].contains(payload["auth_index"] as? String ?? ""), "Queried disabled or expired account")
             let bad = failQuota && payload["auth_index"] as? String == "a"
@@ -39,11 +53,15 @@ import Foundation
             if payload["auth_index"] as? String == "a" {
                 precondition((payload["header"] as? [String: String])?["ChatGPT-Account-Id"] == "workspace-a", "Lost account context")
             }
+            if inventory, inventoryLimited {
+                body = ["status_code": 429, "header": ["Retry-After": ["600"]], "body": "{}"]
+                return (try JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
             if inventory {
                 body = ["status_code": 200, "body": "{\"available_count\":1,\"credits\":[{\"status\":\"available\",\"expires_at\":null}]}"]
                 return (try JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
             }
-            body = ["status_code": bad ? 429 : 200, "header": ["Retry-After": ["600"]], "body": bad ? "{}" : "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":0,\"limit_window_seconds\":18000,\"reset_at\":2000000000}}}"]
+            body = ["status_code": bad ? 429 : 200, "header": ["Retry-After": ["600"]], "body": bad ? "{}" : "{\"plan_type\":\"plus\",\"rate_limit_reset_credits\":{\"available_count\":3},\"rate_limit\":{\"primary_window\":{\"used_percent\":0,\"limit_window_seconds\":18000,\"reset_at\":2000000000}}}"]
         }
         return (try JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
@@ -65,6 +83,14 @@ extension PerformanceRegressionTests {
         check(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key" }, "Missing management authentication")
         let outbound = try JSONSerialization.jsonObject(with: requests.last!.httpBody!) as! [String: Any]
         check((outbound["header"] as? [String: String])?["Authorization"] == "Bearer $TOKEN$", "Did not ask CPA for account credential")
+        await setInventoryLimited()
+        let fallback = try await client.usage(for: accounts.first { $0.id == "a" }!)
+        check(fallback.bankedResets?.availableCount == 3 && fallback.bankedResets?.expirations == nil, "Inventory failure lost usage reset count")
+        let beforeCooldown = await CPAFixture.requests.count
+        _ = try await client.usage(for: accounts.first { $0.id == "a" }!)
+        check(await CPAFixture.requests.count == beforeCooldown + 1, "Inventory ignored server cooldown or blocked ordinary usage")
+        let other = try await client.usage(for: accounts.first { $0.id == "b" }!)
+        check(other.windows.count == 1, "Inventory cooldown blocked another account")
         await CPAFixture.reset()
         await setLegacy()
         let oldClient = await CPAClient(connection: connection, send: CPAFixture.send)
@@ -85,6 +111,21 @@ extension PerformanceRegressionTests {
         let kimiReading = try await CPAClient.parse(kimi, provider: .kimi)
         check(kimiReading.windows.last?.label == "5h", "Kimi minute duration was not normalized")
         check(CPAWindow(label: "x", percent: 0, reset: Date(timeIntervalSince1970: 1e100)).resetText == "--", "Unbounded reset")
+
+        let regional = await CPAClient(connection: connection, send: { request in
+            let response: [String: Any]
+            if let body = request.httpBody {
+                let call = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+                precondition(call["url"] as? String == "https://api.kimi.ai/coding/v1/usages", "Kimi regional endpoint was lost")
+                response = ["status_code": 200, "body": "{\"usage\":{\"limit\":10,\"used\":2}}"]
+            } else {
+                response = ["files": [["auth_index": "regional", "provider": "kimi-ai", "name": "regional"]]]
+            }
+            return (try JSONSerialization.data(withJSONObject: response), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let regionalAccounts = try await regional.accounts()
+        let regionalReading = try await regional.usage(for: regionalAccounts[0])
+        check(regionalReading.windows.first?.percent == 20, "Regional Kimi usage failed")
 
         let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { CPAClient(connection: $0, send: CPAFixture.send) })
         vm.showCodex = true; vm.showKimi = true; vm.showXai = true
@@ -139,6 +180,16 @@ extension PerformanceRegressionTests {
         check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Late CPA response leaked into direct source")
         await CPAFixture.reset()
         try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        await setQuotaDelay()
+        let waitForQuota = Task { await CPAFixture.waitForQuota() }
+        await Task.yield()
+        let quotaRefresh = Task { await vm.refresh() }
+        await waitForQuota.value
+        await vm.useDirectSource()
+        await quotaRefresh.value
+        check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Late quota response leaked after source switch")
+        await CPAFixture.reset()
+        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
         await setDelay()
         let sleeping = Task { await vm.refresh() }
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -155,6 +206,8 @@ extension PerformanceRegressionTests {
         vm.stopAutoRefresh()
         print("PASS: CPA discovery, negotiation, authentication, quota normalization, source isolation, stale data, cooldowns and empty setup")
     }
+    @ProviderActor private static func setQuotaDelay() { CPAFixture.quotaDelay = 100_000_000 }
+    @ProviderActor private static func setInventoryLimited() { CPAFixture.inventoryLimited = true }
     @ProviderActor private static func replaceFiles(_ value: [[String: Any]]) { CPAFixture.files = value }
     @ProviderActor private static func setDelay() { CPAFixture.delay = 100_000_000 }
     @ProviderActor private static func setLegacy() { CPAFixture.legacy = true }

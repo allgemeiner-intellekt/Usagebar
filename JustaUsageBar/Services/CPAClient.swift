@@ -6,6 +6,7 @@ final class CPAClient {
     private let connection: CPAConnection
     private let send: @ProviderActor (URLRequest) async throws -> (Data, URLResponse)
     private var version: String?
+    private var inventoryRetryAt: [String: Date] = [:]
 
     init(connection: CPAConnection, send: @escaping @ProviderActor (URLRequest) async throws -> (Data, URLResponse) = {
         try await ProviderHTTP.data(for: $0)
@@ -98,13 +99,18 @@ final class CPAClient {
             throw CPAError.message("Quota queries are unsupported for this CPA account authentication.")
         }
         var reading = try Self.parse(await outbound(url: url, account: account, headers: headers), provider: account.provider)
-        if account.provider == .codex {
+        let inventoryKey = account.id + ":" + (account.chatGPTAccountID ?? "")
+        if account.provider == .codex, inventoryRetryAt[inventoryKey, default: .distantPast] <= Date() {
             do {
                 let data = try await outbound(url: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", account: account, headers: headers)
                 reading.bankedResets = try CodexBankedResets.parse(data)
+                inventoryRetryAt[inventoryKey] = nil
             } catch {
                 try Task.checkCancellation()
-                // Optional inventory failure must preserve the valid quota response.
+                if case CPAError.http(let status, let retryAfter) = error, status == 429 || retryAfter != nil {
+                    inventoryRetryAt[inventoryKey] = retryAfter ?? Date().addingTimeInterval(120)
+                }
+                // Keep any count from usage; expiration details remain unavailable.
             }
         }
         return reading
@@ -175,7 +181,7 @@ final class CPAClient {
             return number(value).flatMap { abs($0) <= 253402300799 ? Date(timeIntervalSince1970: $0) : nil }
         }
         func window(_ label: String, _ percent: Double?, _ reset: Any?) -> CPAWindow? {
-            guard let percent else { return nil }
+            guard let percent, percent.isFinite else { return nil }
             return CPAWindow(label: label, percent: Int(min(100, max(0, percent)).rounded()), reset: date(reset))
         }
         var windows: [CPAWindow] = []
@@ -228,6 +234,12 @@ final class CPAClient {
         default: break
         }
         guard !windows.isEmpty else { throw CPAError.message("Quota data is unsupported or incomplete for this account.") }
-        return CPAReading(plan: plan, windows: windows)
+        var reading = CPAReading(plan: plan, windows: windows)
+        if provider == .codex,
+           let resets = root["rate_limit_reset_credits"] as? [String: Any],
+           let count = resets["available_count"] as? Int, count >= 0 {
+            reading.bankedResets = CodexBankedResets(availableCount: count)
+        }
+        return reading
     }
 }

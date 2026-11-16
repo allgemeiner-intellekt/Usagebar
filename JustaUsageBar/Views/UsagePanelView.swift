@@ -49,6 +49,7 @@ final class UsagePanelModel: ObservableObject {
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
 
+    var onResize: () -> Void = {}
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
     var onMore: (NSView) -> Void = { _ in }
@@ -72,29 +73,32 @@ struct UsagePanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-            if model.needsSetup {
-                setup
-            } else if let message = model.emptyMessage, model.cards.isEmpty {
-                Text(message).foregroundStyle(.secondary).padding(10)
-            } else {
-                if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
-                VStack(spacing: 6) {
-                    ForEach(model.cards) { card in
-                        UsagePanelCardView(
-                            card: card,
-                            model: model
-                        )
+                VStack(alignment: .leading, spacing: 8) {
+                if model.needsSetup {
+                    setup
+                } else if let message = model.emptyMessage, model.cards.isEmpty {
+                    Text(message).foregroundStyle(.secondary).padding(10)
+                } else {
+                    if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
+                    VStack(spacing: 6) {
+                        ForEach(model.cards) { card in
+                            UsagePanelCardView(
+                                card: card,
+                                model: model
+                            )
+                        }
                     }
                 }
-            }
-            }
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: PanelContentHeight.self, value: geometry.size.height)
-            })
+                }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: PanelContentHeight.self, value: geometry.size.height)
+                })
             }
             .frame(height: min(contentHeight, model.maximumContentHeight))
-            .onPreferenceChange(PanelContentHeight.self) { contentHeight = $0 }
+            .onPreferenceChange(PanelContentHeight.self) {
+                contentHeight = $0
+                model.onResize()
+            }
             footer
         }
         .padding(8)

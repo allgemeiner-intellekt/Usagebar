@@ -12,6 +12,8 @@ import CryptoKit
 final class CredentialStorage {
     static let shared = CredentialStorage()
 
+    private let storageURL: URL?
+    private let keyOverride: SymmetricKey?
     private let fileName = "credentials.enc"
     private var cachedCredentials: Credentials?
 
@@ -20,6 +22,7 @@ final class CredentialStorage {
         var organizationId: String?
         var claudeOAuth: ClaudeOAuthCredentials?
         var kimiCredential: String?
+        var cpaConnection: CPAConnection?
     }
 
     nonisolated struct ClaudeOAuthCredentials: Codable, Equatable {
@@ -29,8 +32,22 @@ final class CredentialStorage {
         var scopes: [String]
     }
 
-    private init() {
+    init(storageURL: URL? = nil, encryptionKey: SymmetricKey? = nil) {
+        self.storageURL = storageURL
+        self.keyOverride = encryptionKey
         loadCredentials()
+    }
+
+    var cpaConnection: CPAConnection? { cachedCredentials?.cpaConnection }
+
+    /// Propagate persistence failure so Test and enable cannot activate unsaved credentials.
+    func saveCPAConnection(_ connection: CPAConnection?) throws {
+        var credentials = cachedCredentials ?? Credentials()
+        credentials.cpaConnection = connection
+        let data = try encrypt(JSONEncoder().encode(credentials))
+        try data.write(to: credentialsFileURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsFileURL.path)
+        cachedCredentials = credentials
     }
 
     // MARK: - Public API
@@ -123,7 +140,8 @@ final class CredentialStorage {
         let isEmpty = cachedCredentials?.sessionKey == nil &&
             cachedCredentials?.organizationId == nil &&
             cachedCredentials?.claudeOAuth == nil &&
-            cachedCredentials?.kimiCredential == nil
+            cachedCredentials?.kimiCredential == nil &&
+            cachedCredentials?.cpaConnection == nil
         if isEmpty {
             cachedCredentials = nil
             try? FileManager.default.removeItem(at: credentialsFileURL)
@@ -135,6 +153,7 @@ final class CredentialStorage {
     // MARK: - File Storage
 
     private var credentialsFileURL: URL {
+        if let storageURL { return storageURL }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appFolder = appSupport.appendingPathComponent("JustaUsageBar", isDirectory: true)
 
@@ -178,6 +197,7 @@ final class CredentialStorage {
     // MARK: - Encryption (AES-GCM with device-specific key)
 
     private lazy var encryptionKey: SymmetricKey = {
+        if let keyOverride { return keyOverride }
         // Generate a deterministic key based on machine-specific info
         // This ensures only this machine can decrypt the credentials
         let machineId = getMachineIdentifier()

@@ -117,3 +117,7 @@ Personal builds use manual updates from the fork’s Actions artifacts. `AppDele
 The primary interface is AppKit for precise status-item drawing; SwiftUI is used for settings and authentication. The app runs as `LSUIElement`, so it has no normal Dock icon while running, but the application icon remains visible in Finder and installation surfaces.
 
 Provider changes must keep discovery inside services, raw payload parsing provider-specific, published state in `UsageViewModel`, and menu rendering based on normalized models. New storage or network destinations require documentation and security review.
+
+## Optional CPA source
+
+[CLIProxyAPI setup and boundaries](CPA.md) describes the exclusive global source selection. `CPAClient` lists remote accounts and sends account-pinned quota reads. `UsageViewModel` owns account reconciliation, independent freshness/backoff, and source-switch cancellation. CPA credentials use the existing encrypted store. Direct credential discovery never runs during CPA refreshes. Codex reset inventory has its own account-scoped server cooldown and retains counts supplied by usage when expiration details are unavailable.

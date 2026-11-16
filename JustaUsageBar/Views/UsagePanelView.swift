@@ -26,6 +26,7 @@ struct UsagePanelCard: Identifiable {
     var message: String?
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
+    var accounts: [CPAAccount] = []
     var bankedResets: CodexBankedResets?
     var id: DisplayProvider { provider }
 
@@ -42,10 +43,13 @@ final class UsagePanelModel: ObservableObject {
     @Published var isRefreshing = false
     /// No provider is signed in; the panel offers setup instead of cards.
     @Published var needsSetup = false
+    @Published var emptyMessage: String?
+    @Published var maximumContentHeight: CGFloat = 600
 
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
 
+    var onResize: () -> Void = {}
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
     var onMore: (NSView) -> Void = { _ in }
@@ -55,23 +59,45 @@ final class UsagePanelModel: ObservableObject {
     var onQuit: () -> Void = {}
 }
 
+private struct PanelContentHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 300
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct UsagePanelView: View {
     @ObservedObject var model: UsagePanelModel
+
+    @State private var contentHeight: CGFloat = 300
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            if model.needsSetup {
-                setup
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(model.cards) { card in
-                        UsagePanelCardView(
-                            card: card,
-                            model: model
-                        )
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                if model.needsSetup {
+                    setup
+                } else if let message = model.emptyMessage, model.cards.isEmpty {
+                    Text(message).foregroundStyle(.secondary).padding(10)
+                } else {
+                    if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
+                    VStack(spacing: 6) {
+                        ForEach(model.cards) { card in
+                            UsagePanelCardView(
+                                card: card,
+                                model: model
+                            )
+                        }
                     }
                 }
+                }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: PanelContentHeight.self, value: geometry.size.height)
+                })
+            }
+            .frame(height: min(contentHeight, model.maximumContentHeight))
+            .onPreferenceChange(PanelContentHeight.self) {
+                contentHeight = $0
+                model.onResize()
             }
             footer
         }
@@ -177,6 +203,31 @@ struct UsagePanelCardView: View {
                 }
             }
             .frame(height: 18)
+
+            ForEach(card.accounts) { account in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(account.identity) · \(account.id)")
+                        .font(.system(size: 12, weight: .medium))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let plan = account.reading?.plan, !plan.isEmpty { Text(plan).font(.system(size: 12)).foregroundStyle(.secondary) }
+                    ForEach(account.reading?.windows ?? []) { window in
+                        HStack(spacing: 7) {
+                            Text(window.label).font(.system(size: 12)).frame(minWidth: 28, alignment: .leading)
+                            UsageMeter(percent: window.percent, fill: meterColor)
+                            Text("\(window.percent)%").monospacedDigit().frame(width: 40, alignment: .trailing)
+                            Text(window.resetText).font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let resets = account.reading?.bankedResets, resets.availableCount > 0 {
+                        BankedResetSummaryView(resets: resets)
+                    }
+                    if let message = cpaAccountMessage(account) {
+                        Text(message).font(.system(size: 12)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(.top, 4)
+            }
 
             ForEach(card.rows) { row in
                 HStack(spacing: 7) {
@@ -492,8 +543,9 @@ final class UsagePanel: NSPanel {
         let size = contentView?.fittingSize ?? NSSize(width: 340, height: 300)
         let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame ?? buttonFrame
         let x = min(max(buttonFrame.midX - size.width / 2, visible.minX + 8), visible.maxX - size.width - 8)
-        let y = buttonFrame.minY - size.height - 6
-        setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        let height = min(size.height, visible.height - 16)
+        let y = max(visible.minY + 8, buttonFrame.minY - height - 6)
+        setFrame(NSRect(x: x, y: y, width: size.width, height: height), display: true)
         makeKeyAndOrderFront(nil)
         startMonitoring()
     }
@@ -501,7 +553,9 @@ final class UsagePanel: NSPanel {
     /// Keeps the top edge in place when the content grows or shrinks.
     func fitContent() {
         guard isVisible, let size = contentView?.fittingSize, size.height != frame.height else { return }
-        setFrame(NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height), display: true)
+        let visible = (screen ?? NSScreen.main)?.visibleFrame ?? frame
+        let height = min(size.height, visible.height - 16)
+        setFrame(NSRect(x: frame.minX, y: max(visible.minY + 8, frame.maxY - height), width: size.width, height: height), display: true)
     }
 
     override func close() {
@@ -528,4 +582,12 @@ final class UsagePanel: NSPanel {
         outsideClickMonitor = nil
         keyMonitor = nil
     }
+}
+
+func cpaAccountMessage(_ account: CPAAccount) -> String? {
+    if account.disabled { return "Disabled in CPA" }
+    if account.expired { return "Expired. Renew this account in CPA." }
+    guard let error = account.error else { return nil }
+    guard let date = account.refresh.lastSuccess else { return error + " No successful update yet." }
+    return error + " Last success: " + date.formatted(date: .abbreviated, time: .shortened)
 }

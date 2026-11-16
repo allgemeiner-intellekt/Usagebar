@@ -212,10 +212,49 @@ struct StatusRenderingTests {
         UserDefaults.standard.set("codex", forKey: "preferredDisplayProvider")
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
+        try await testCPAStorage()
         try await CodexAPIService.verifyBankedResets()
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
-        try AppDelegate(viewModel: model).verifyRendering(output: output)
+        let delegate = AppDelegate(viewModel: model)
+        try delegate.verifyRendering(output: output)
+        delegate.verifyCPARendering()
         print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, provider switches, closed-menu reuse, visibility cadence")
+    }
+}
+
+extension UsageViewModel {
+    fileprivate func useCPAAccountFixtures(_ accounts: [CPAAccount]) {
+        source = .cpa
+        cpaAccounts = accounts
+        availableProviders = Set(accounts.map(\.provider))
+    }
+}
+
+extension AppDelegate {
+    fileprivate func verifyCPARendering() {
+        viewModel.stopAutoRefresh()
+        let reading = CPAReading(plan: "plus", windows: [CPAWindow(label: "5h", percent: 27, reset: nil)])
+        let accounts = (0..<20).map {
+            CPAAccount(id: "fixture-\($0)", provider: .codex, identity: "Account \($0)", disabled: false, expired: false, reading: reading)
+        }
+        viewModel.useCPAAccountFixtures(accounts)
+        let cards = panelCards()
+        precondition(cards.count == 1 && cards[0].accounts.count == 20, "Accounts are not grouped in one provider card")
+        precondition(cards[0].rows.isEmpty && cards[0].detail.isEmpty, "Multi-account quota was aggregated")
+        viewModel.useCPAAccountFixtures([accounts[0]])
+        let compact = panelCards()[0]
+        precondition(compact.accounts.isEmpty && compact.rows.count == 1, "Single account lost compact style")
+        viewModel.useCPAAccountFixtures(accounts)
+        isPanelOpen = true
+        updatePanel()
+        precondition(!panelModel.needsSetup && panelModel.emptyMessage == nil, "CPA panel gained source/setup clutter")
+        for scheme: ColorScheme in [.light, .dark] {
+            let host = NSHostingView(rootView: UsagePanelView(model: panelModel).environment(\.colorScheme, scheme))
+            host.setFrameSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            precondition(host.fittingSize.height <= panelModel.maximumContentHeight + 120, "Multi-account panel exceeded screen cap")
+        }
+        panel.close()
     }
 }

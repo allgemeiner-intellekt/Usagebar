@@ -9,6 +9,7 @@ struct PerformanceRegressionTests {
         // A run that trapped leaves its preferences behind.
         UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests")
         defer { UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests") }
+        try await testCPA()
         testRefreshPolicy()
         testRetryAfter()
         testTimerLifetime()

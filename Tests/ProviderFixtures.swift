@@ -62,6 +62,8 @@ nonisolated func isRequestCancelled(_ error: Error) -> Bool {
 }
 @ProviderActor final class CredentialStorage {
     static let shared = CredentialStorage()
+    var cpaConnection: CPAConnection?
+    func saveCPAConnection(_ value: CPAConnection?) throws { cpaConnection = value }
     var hasCredentials: Bool { false }
     func setWebSession(sessionKey: String, organizationId: String) {}
     func setKimiCredential(_ value: String) {}

@@ -16,10 +16,14 @@ cat > "$TEST_APP/Contents/Info.plist" <<'PLIST'
 PLIST
 # Join controller/test extensions for private fixture state without shipped test APIs.
 cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
-  "$ROOT_DIR/Tests/PerformanceRegressionTests.swift" > "$TEST_DIR/RefreshTests.swift"
+  "$ROOT_DIR/Tests/PerformanceRegressionTests.swift" \
+  "$ROOT_DIR/Tests/CPARegressionTests.swift" > "$TEST_DIR/RefreshTests.swift"
 xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
   "$ROOT_DIR/JustaUsageBar/Models/DisplayProvider.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageData.swift" \
+  "$ROOT_DIR/JustaUsageBar/Models/CodexBankedResets.swift" \
+  "$ROOT_DIR/JustaUsageBar/Models/CPAModels.swift" \
+  "$ROOT_DIR/JustaUsageBar/Services/CPAClient.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageRefreshPolicy.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/KeychainTool.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/ProviderActor.swift" \
@@ -36,7 +40,8 @@ cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/AppDelegate.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/CodexAPIService.swift" \
   "$ROOT_DIR/Tests/CodexBankedResetTests.swift" \
-  "$ROOT_DIR/Tests/StatusRenderingTests.swift" > "$TEST_DIR/RenderingTests.swift"
+  "$ROOT_DIR/Tests/StatusRenderingTests.swift" \
+  "$ROOT_DIR/Tests/CPAStorageTests.swift" > "$TEST_DIR/RenderingTests.swift"
 services=()
 for source in "$ROOT_DIR"/JustaUsageBar/Services/*.swift; do
   [[ "$source" == */CodexAPIService.swift ]] || services+=("$source")

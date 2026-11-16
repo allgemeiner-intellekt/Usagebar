@@ -44,6 +44,7 @@ final class UsagePanelModel: ObservableObject {
     /// No provider is signed in; the panel offers setup instead of cards.
     @Published var needsSetup = false
     @Published var emptyMessage: String?
+    @Published var maximumContentHeight: CGFloat = 600
 
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
@@ -57,12 +58,21 @@ final class UsagePanelModel: ObservableObject {
     var onQuit: () -> Void = {}
 }
 
+private struct PanelContentHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 300
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct UsagePanelView: View {
     @ObservedObject var model: UsagePanelModel
+
+    @State private var contentHeight: CGFloat = 300
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
             if model.needsSetup {
                 setup
             } else if let message = model.emptyMessage, model.cards.isEmpty {
@@ -78,6 +88,13 @@ struct UsagePanelView: View {
                     }
                 }
             }
+            }
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: PanelContentHeight.self, value: geometry.size.height)
+            })
+            }
+            .frame(height: min(contentHeight, model.maximumContentHeight))
+            .onPreferenceChange(PanelContentHeight.self) { contentHeight = $0 }
             footer
         }
         .padding(8)
@@ -197,6 +214,9 @@ struct UsagePanelCardView: View {
                             Text("\(window.percent)%").monospacedDigit().frame(width: 40, alignment: .trailing)
                             Text(window.resetText).font(.system(size: 12)).foregroundStyle(.secondary)
                         }
+                    }
+                    if let resets = account.reading?.bankedResets, resets.availableCount > 0 {
+                        BankedResetSummaryView(resets: resets)
                     }
                     if let message = cpaAccountMessage(account) {
                         Text(message).font(.system(size: 12)).foregroundStyle(.secondary)
@@ -519,8 +539,9 @@ final class UsagePanel: NSPanel {
         let size = contentView?.fittingSize ?? NSSize(width: 340, height: 300)
         let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame ?? buttonFrame
         let x = min(max(buttonFrame.midX - size.width / 2, visible.minX + 8), visible.maxX - size.width - 8)
-        let y = buttonFrame.minY - size.height - 6
-        setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        let height = min(size.height, visible.height - 16)
+        let y = max(visible.minY + 8, buttonFrame.minY - height - 6)
+        setFrame(NSRect(x: x, y: y, width: size.width, height: height), display: true)
         makeKeyAndOrderFront(nil)
         startMonitoring()
     }
@@ -528,7 +549,9 @@ final class UsagePanel: NSPanel {
     /// Keeps the top edge in place when the content grows or shrinks.
     func fitContent() {
         guard isVisible, let size = contentView?.fittingSize, size.height != frame.height else { return }
-        setFrame(NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height), display: true)
+        let visible = (screen ?? NSScreen.main)?.visibleFrame ?? frame
+        let height = min(size.height, visible.height - 16)
+        setFrame(NSRect(x: frame.minX, y: max(visible.minY + 8, frame.maxY - height), width: size.width, height: height), display: true)
     }
 
     override func close() {

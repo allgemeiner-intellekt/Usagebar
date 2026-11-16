@@ -553,7 +553,7 @@ final class UsageViewModel: ObservableObject {
                 let previous = Dictionary(uniqueKeysWithValues: cpaAccounts.map { ($0.id, $0) })
                 cpaAccounts = discovered.map { account in
                     var account = account
-                    if let old = previous[account.id], old.provider == account.provider, old.identity == account.identity {
+                    if let old = previous[account.id], old.provider == account.provider, old.identity == account.identity, old.variant == account.variant, old.chatGPTAccountID == account.chatGPTAccountID {
                         account.reading = old.reading
                         account.refresh = old.refresh
                         account.error = old.error
@@ -597,7 +597,15 @@ final class UsageViewModel: ObservableObject {
                 }
             }
         }
-        guard !Task.isCancelled, generation == sourceGeneration else { return }
+        guard generation == sourceGeneration else { return }
+        if Task.isCancelled {
+            for account in due {
+                if let index = cpaAccounts.firstIndex(where: { $0.id == account.id }) {
+                    cpaAccounts[index].refresh.lastAttempt = nil
+                }
+            }
+            return
+        }
         lastUpdated = cpaAccounts.compactMap { $0.refresh.lastSuccess }.max()
     }
 

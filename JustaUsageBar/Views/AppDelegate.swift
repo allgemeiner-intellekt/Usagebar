@@ -374,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// open menu would be rebuilt.
     private func updatePanel() {
         guard isPanelOpen else { return }
+        panelModel.maximumContentHeight = max(100, (statusItem.button?.window?.screen?.visibleFrame.height ?? 768) - 120)
         panelModel.needsSetup = viewModel.source == .direct && !viewModel.hasCredentials
         panelModel.emptyMessage = viewModel.source == .cpa ? (viewModel.cpaError ?? (viewModel.cpaAccounts.isEmpty ? "No supported accounts. Add accounts in CPA, then refresh." : nil)) : nil
         panelModel.cards = panelCards()
@@ -413,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if accounts.count == 1, let account = accounts.first {
                     return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
                         UsagePanelRow(label: $0.label, percent: $0.percent, resetText: $0.resetText)
-                    }, message: cpaAccountMessage(account))
+                    }, message: cpaAccountMessage(account), bankedResets: account.reading?.bankedResets)
                 }
                 return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts)
             }

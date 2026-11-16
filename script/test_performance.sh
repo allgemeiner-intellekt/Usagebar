@@ -21,6 +21,7 @@ cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
 xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
   "$ROOT_DIR/JustaUsageBar/Models/DisplayProvider.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageData.swift" \
+  "$ROOT_DIR/JustaUsageBar/Models/CodexBankedResets.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/CPAModels.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/CPAClient.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageRefreshPolicy.swift" \
@@ -39,7 +40,8 @@ cat "$ROOT_DIR/JustaUsageBar/ViewModels/UsageViewModel.swift" \
   "$ROOT_DIR/JustaUsageBar/Views/AppDelegate.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/CodexAPIService.swift" \
   "$ROOT_DIR/Tests/CodexBankedResetTests.swift" \
-  "$ROOT_DIR/Tests/StatusRenderingTests.swift" > "$TEST_DIR/RenderingTests.swift"
+  "$ROOT_DIR/Tests/StatusRenderingTests.swift" \
+  "$ROOT_DIR/Tests/CPAStorageTests.swift" > "$TEST_DIR/RenderingTests.swift"
 services=()
 for source in "$ROOT_DIR"/JustaUsageBar/Services/*.swift; do
   [[ "$source" == */CodexAPIService.swift ]] || services+=("$source")

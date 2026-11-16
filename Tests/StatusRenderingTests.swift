@@ -212,6 +212,7 @@ struct StatusRenderingTests {
         UserDefaults.standard.set("codex", forKey: "preferredDisplayProvider")
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
+        try await testCPAStorage()
         try await CodexAPIService.verifyBankedResets()
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }

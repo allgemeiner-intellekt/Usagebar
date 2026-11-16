@@ -8,9 +8,9 @@ import Foundation
     static var failDiscovery = false
     static var failQuota = false
     static var delay: UInt64 = 0
-    static let files: [[String: Any]] = [
+    static var files: [[String: Any]] = [
         ["auth_index": "b", "name": "second", "provider": "codex"],
-        ["auth_index": "a", "name": "first", "provider": "codex"],
+        ["auth_index": "a", "name": "first", "provider": "codex", "id_token": ["chatgpt_account_id": "workspace-a"]],
         ["auth_index": "disabled", "name": "disabled", "provider": "kimi", "disabled": true],
         ["auth_index": "expired", "name": "expired", "provider": "xai", "status": "expired"]
     ]
@@ -35,6 +35,14 @@ import Foundation
             precondition(["a", "b"].contains(payload["auth_index"] as? String ?? ""), "Queried disabled or expired account")
             let bad = failQuota && payload["auth_index"] as? String == "a"
             status = 200
+            let inventory = (payload["url"] as? String)?.hasSuffix("rate-limit-reset-credits") == true
+            if payload["auth_index"] as? String == "a" {
+                precondition((payload["header"] as? [String: String])?["ChatGPT-Account-Id"] == "workspace-a", "Lost account context")
+            }
+            if inventory {
+                body = ["status_code": 200, "body": "{\"available_count\":1,\"credits\":[{\"status\":\"available\",\"expires_at\":null}]}"]
+                return (try JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            }
             body = ["status_code": bad ? 429 : 200, "header": ["Retry-After": ["600"]], "body": bad ? "{}" : "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":0,\"limit_window_seconds\":18000,\"reset_at\":2000000000}}}"]
         }
         return (try JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -50,6 +58,7 @@ extension PerformanceRegressionTests {
         check(accounts.count == 4, "Discovery lost accounts")
         check(accounts.map(\.identity) == ["disabled", "expired", "first", "second"], "Account order changed")
         let reading = try await client.usage(for: accounts.first { $0.id == "a" }!)
+        check(reading.bankedResets?.availableCount == 1, "Missing reset inventory")
         check(reading.windows.first?.percent == 0, "Zero usage is valid data")
         check(reading.windows.first?.label == "5h", "Window was invented")
         let requests = await CPAFixture.requests
@@ -69,6 +78,13 @@ extension PerformanceRegressionTests {
         check(await CPAFixture.requests.count == 1, "Rejected key triggered legacy probe")
         await CPAFixture.reset()
         do { _ = try await CPAClient.parse(Data("{}".utf8), provider: .codex); fatalError("Incomplete quota became zero") } catch {}
+
+        let huge = Data("{\"rate_limit\":{\"primary_window\":{\"used_percent\":0,\"limit_window_seconds\":1e100}}}".utf8)
+        do { _ = try await CPAClient.parse(huge, provider: .codex); fatalError("Oversized duration accepted") } catch {}
+        let kimi = Data("{\"usage\":{\"used\":1,\"limit\":10},\"limits\":[{\"window\":{\"duration\":300,\"timeUnit\":\"TIME_UNIT_MINUTE\"},\"detail\":{\"used\":2,\"limit\":10}}]}".utf8)
+        let kimiReading = try await CPAClient.parse(kimi, provider: .kimi)
+        check(kimiReading.windows.last?.label == "5h", "Kimi minute duration was not normalized")
+        check(CPAWindow(label: "x", percent: 0, reset: Date(timeIntervalSince1970: 1e100)).resetText == "--", "Unbounded reset")
 
         let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { CPAClient(connection: $0, send: CPAFixture.send) })
         vm.showCodex = true; vm.showKimi = true; vm.showXai = true
@@ -96,17 +112,58 @@ extension PerformanceRegressionTests {
         await setEmpty()
         try await vm.testAndEnableCPA(address: "https://empty.invalid", key: "key")
         check(vm.source == .cpa && vm.cpaAccounts.isEmpty, "Empty authenticated instance must pass")
+        await CPAFixture.reset()
+        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        let steady = await CPAFixture.requests.count
+        await vm.refreshIfStaleForCPA()
+        check(await CPAFixture.requests.count == steady, "CPA refreshed fresh data")
+        let originalFiles = await CPAFixture.files
+        await replaceFiles([originalFiles.first { $0["auth_index"] as? String == "b" }!])
+        await vm.refresh()
+        check(vm.cpaAccounts.map(\.id) == ["b"], "Successful discovery did not remove accounts")
+        await replaceFiles(originalFiles)
+        await vm.refresh()
+        check(vm.cpaAccounts.count == 4, "Successful discovery did not add accounts")
+        vm.powerModeChanged(lowPower: true)
+        check(vm.scheduledRefreshInterval == 1500, "CPA ignored hidden Low Power cadence")
+        vm.usageVisibilityChanged(isVisible: true)
+        check(vm.scheduledRefreshInterval == 300, "CPA ignored visible Low Power cadence")
+        vm.powerModeChanged(lowPower: false)
+        check(vm.scheduledRefreshInterval == 120, "CPA visible cadence changed")
+        vm.usageVisibilityChanged(isVisible: false)
+        await setDelay()
+        let late = Task { await vm.refresh() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await vm.useDirectSource()
+        await late.value
+        check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Late CPA response leaked into direct source")
+        await CPAFixture.reset()
+        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        await setDelay()
+        let sleeping = Task { await vm.refresh() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        vm.setSystemAsleep(true)
+        await sleeping.value
+        check(vm.cpaAccounts.allSatisfy { $0.refresh.consecutiveFailures == 0 }, "Sleep became an account failure")
+        vm.setSystemAsleep(false)
+        await CPAFixture.reset()
         await vm.useDirectSource()
         check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Direct switch retained CPA state")
-        check(await CredentialStorage.shared.cpaConnection?.address == "https://empty.invalid", "Switch deleted configuration")
+        check(await CredentialStorage.shared.cpaConnection?.address == connection.address, "Switch deleted configuration")
         try await vm.clearCPAConfiguration()
         check(await CredentialStorage.shared.cpaConnection == nil, "Clear kept CPA key")
         vm.stopAutoRefresh()
         print("PASS: CPA discovery, negotiation, authentication, quota normalization, source isolation, stale data, cooldowns and empty setup")
     }
+    @ProviderActor private static func replaceFiles(_ value: [[String: Any]]) { CPAFixture.files = value }
+    @ProviderActor private static func setDelay() { CPAFixture.delay = 100_000_000 }
     @ProviderActor private static func setLegacy() { CPAFixture.legacy = true }
     @ProviderActor private static func setReject() { CPAFixture.reject = true }
     @ProviderActor private static func setEmpty() { CPAFixture.empty = true }
     @ProviderActor private static func setFailQuota() { CPAFixture.failQuota = true }
     @ProviderActor private static func setFailDiscovery() { CPAFixture.failDiscovery = true }
+}
+
+extension UsageViewModel {
+    fileprivate func refreshIfStaleForCPA() async { await requestRefresh() }
 }

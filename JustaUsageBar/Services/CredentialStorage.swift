@@ -12,6 +12,8 @@ import CryptoKit
 final class CredentialStorage {
     static let shared = CredentialStorage()
 
+    private let storageURL: URL?
+    private let keyOverride: SymmetricKey?
     private let fileName = "credentials.enc"
     private var cachedCredentials: Credentials?
 
@@ -30,7 +32,9 @@ final class CredentialStorage {
         var scopes: [String]
     }
 
-    private init() {
+    init(storageURL: URL? = nil, encryptionKey: SymmetricKey? = nil) {
+        self.storageURL = storageURL
+        self.keyOverride = encryptionKey
         loadCredentials()
     }
 
@@ -150,6 +154,7 @@ final class CredentialStorage {
     // MARK: - File Storage
 
     private var credentialsFileURL: URL {
+        if let storageURL { return storageURL }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appFolder = appSupport.appendingPathComponent("JustaUsageBar", isDirectory: true)
 
@@ -193,6 +198,7 @@ final class CredentialStorage {
     // MARK: - Encryption (AES-GCM with device-specific key)
 
     private lazy var encryptionKey: SymmetricKey = {
+        if let keyOverride { return keyOverride }
         // Generate a deterministic key based on machine-specific info
         // This ensures only this machine can decrypt the credentials
         let machineId = getMachineIdentifier()

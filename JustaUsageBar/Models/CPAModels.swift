@@ -26,7 +26,9 @@ nonisolated struct CPAWindow: Identifiable {
     var id: String { label }
     var resetText: String {
         guard let reset else { return "--" }
-        let minutes = max(0, Int(reset.timeIntervalSinceNow / 60))
+        let interval = reset.timeIntervalSinceNow / 60
+        guard interval.isFinite, abs(interval) < 10_000_000 else { return "--" }
+        let minutes = max(0, Int(interval))
         if minutes == 0 { return "Now" }
         if minutes >= 1440 { return "\(minutes / 1440)d \(minutes % 1440 / 60)h" }
         return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
@@ -36,6 +38,7 @@ nonisolated struct CPAWindow: Identifiable {
 nonisolated struct CPAReading {
     var plan = ""
     var windows: [CPAWindow]
+    var bankedResets: CodexBankedResets?
 }
 
 nonisolated struct CPAAccount: Identifiable {
@@ -44,6 +47,8 @@ nonisolated struct CPAAccount: Identifiable {
     let identity: String
     let disabled: Bool
     let expired: Bool
+    var variant: String = ""
+    var chatGPTAccountID: String?
     var reading: CPAReading?
     var error: String?
     var refresh = ProviderRefreshState()

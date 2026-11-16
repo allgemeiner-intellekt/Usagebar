@@ -119,3 +119,63 @@ struct SettingsView: View {
 #Preview {
     SettingsView(viewModel: UsageViewModel.shared)
 }
+
+struct SourceSettingsView: View {
+    @ObservedObject var viewModel: UsageViewModel
+    @State private var address = ""
+    @State private var key = ""
+    @State private var message: String?
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Data source").font(.headline)
+            HStack {
+                Button(viewModel.source == .direct ? "Direct ✓" : "Use direct") {
+                    run { await viewModel.useDirectSource() }
+                }
+                Button(viewModel.source == .cpa ? "CLIProxyAPI ✓" : "Use saved CPA") {
+                    run { try await viewModel.useSavedCPA() }
+                }
+            }
+            TextField("CPA base address, e.g. http://localhost:8317", text: $address)
+            SecureField("Management key", text: $key)
+            Text("Remote connections should use HTTPS. HTTP sends the management key in plaintext. CPA must allow remote management for remote access.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Test and enable") {
+                    run {
+                        try await viewModel.testAndEnableCPA(address: address, key: key)
+                        key = ""
+                        message = "Connection enabled."
+                    }
+                }
+                .disabled(address.isEmpty || key.isEmpty)
+                Button("Clear saved CPA") {
+                    run {
+                        try await viewModel.clearCPAConfiguration()
+                        address = ""; key = ""
+                        message = "CPA configuration removed."
+                    }
+                }
+                if busy { ProgressView().controlSize(.small) }
+            }
+            if let message { Text(message).font(.caption).fixedSize(horizontal: false, vertical: true) }
+        }
+        .textFieldStyle(.roundedBorder)
+        .padding(20)
+        .frame(width: 440)
+        .disabled(busy)
+        .task { address = await CredentialStorage.shared.cpaConnection?.address ?? "" }
+    }
+
+    private func run(_ action: @escaping @MainActor () async throws -> Void) {
+        busy = true
+        message = nil
+        Task {
+            defer { busy = false }
+            do { try await action() }
+            catch { message = (error as? CPAError)?.errorDescription ?? "Could not save or connect. Check the address, key, and network." }
+        }
+    }
+}

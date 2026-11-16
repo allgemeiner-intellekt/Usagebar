@@ -26,6 +26,7 @@ struct UsagePanelCard: Identifiable {
     var message: String?
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
+    var accounts: [CPAAccount] = []
     var bankedResets: CodexBankedResets?
     var id: DisplayProvider { provider }
 
@@ -42,6 +43,7 @@ final class UsagePanelModel: ObservableObject {
     @Published var isRefreshing = false
     /// No provider is signed in; the panel offers setup instead of cards.
     @Published var needsSetup = false
+    @Published var emptyMessage: String?
 
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
@@ -63,7 +65,10 @@ struct UsagePanelView: View {
             header
             if model.needsSetup {
                 setup
+            } else if let message = model.emptyMessage, model.cards.isEmpty {
+                Text(message).foregroundStyle(.secondary).padding(10)
             } else {
+                if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
                 VStack(spacing: 6) {
                     ForEach(model.cards) { card in
                         UsagePanelCardView(
@@ -177,6 +182,28 @@ struct UsagePanelCardView: View {
                 }
             }
             .frame(height: 18)
+
+            ForEach(card.accounts) { account in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(account.identity) · \(account.id)")
+                        .font(.system(size: 12, weight: .medium))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let plan = account.reading?.plan, !plan.isEmpty { Text(plan).font(.system(size: 12)).foregroundStyle(.secondary) }
+                    ForEach(account.reading?.windows ?? []) { window in
+                        HStack(spacing: 7) {
+                            Text(window.label).font(.system(size: 12)).frame(minWidth: 28, alignment: .leading)
+                            UsageMeter(percent: window.percent, fill: meterColor)
+                            Text("\(window.percent)%").monospacedDigit().frame(width: 40, alignment: .trailing)
+                            Text(window.resetText).font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let message = cpaAccountMessage(account) {
+                        Text(message).font(.system(size: 12)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(.top, 4)
+            }
 
             ForEach(card.rows) { row in
                 HStack(spacing: 7) {
@@ -528,4 +555,12 @@ final class UsagePanel: NSPanel {
         outsideClickMonitor = nil
         keyMonitor = nil
     }
+}
+
+func cpaAccountMessage(_ account: CPAAccount) -> String? {
+    if account.disabled { return "Disabled in CPA" }
+    if account.expired { return "Expired. Renew this account in CPA." }
+    guard let error = account.error else { return nil }
+    guard let date = account.refresh.lastSuccess else { return error + " No successful update yet." }
+    return error + " Last success: " + date.formatted(date: .abbreviated, time: .shortened)
 }

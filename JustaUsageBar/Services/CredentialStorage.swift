@@ -20,6 +20,7 @@ final class CredentialStorage {
         var organizationId: String?
         var claudeOAuth: ClaudeOAuthCredentials?
         var kimiCredential: String?
+        var cpaConnection: CPAConnection?
     }
 
     nonisolated struct ClaudeOAuthCredentials: Codable, Equatable {
@@ -31,6 +32,18 @@ final class CredentialStorage {
 
     private init() {
         loadCredentials()
+    }
+
+    var cpaConnection: CPAConnection? { cachedCredentials?.cpaConnection }
+
+    /// Propagate persistence failure so Test and enable cannot activate unsaved credentials.
+    func saveCPAConnection(_ connection: CPAConnection?) throws {
+        var credentials = cachedCredentials ?? Credentials()
+        credentials.cpaConnection = connection
+        let data = try encrypt(JSONEncoder().encode(credentials))
+        try data.write(to: credentialsFileURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsFileURL.path)
+        cachedCredentials = credentials
     }
 
     // MARK: - Public API
@@ -73,7 +86,8 @@ final class CredentialStorage {
         }
     }
 
-    var kimiCredential: String? {
+    var kimiCredential: String?
+        var cpaConnection: CPAConnection? {
         get { cachedCredentials?.kimiCredential }
         set {
             if cachedCredentials == nil {
@@ -123,7 +137,8 @@ final class CredentialStorage {
         let isEmpty = cachedCredentials?.sessionKey == nil &&
             cachedCredentials?.organizationId == nil &&
             cachedCredentials?.claudeOAuth == nil &&
-            cachedCredentials?.kimiCredential == nil
+            cachedCredentials?.kimiCredential == nil &&
+            cachedCredentials?.cpaConnection == nil
         if isEmpty {
             cachedCredentials = nil
             try? FileManager.default.removeItem(at: credentialsFileURL)

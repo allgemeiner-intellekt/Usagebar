@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         super.init()
     }
 
+    private var sourceWindow: NSWindow?
     private var credentialsWindow: NSWindow?
 
     // Update availability state
@@ -180,6 +181,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard isMenuOpen, menu.highlightedItem?.submenu == nil else { return }
         menu.removeAllItems()
 
+        let sourceItem = NSMenuItem(title: "Data source…", action: #selector(showSourceSettings), keyEquivalent: "")
+        sourceItem.target = self
+        menu.addItem(sourceItem)
+
         let hasClaude = viewModel.hasClaudeCredentials
         let hasCodex = viewModel.hasCodexCredentials
         let hasCursor = viewModel.hasCursorCredentials
@@ -187,7 +192,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hasXai = viewModel.hasXaiCredentials
         let hasKimi = viewModel.hasKimiCredentials
 
-        if !hasClaude && !hasCodex && !hasCursor && !hasZai && !hasXai && !hasKimi {
+        if viewModel.source == .cpa {
+            let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshData), keyEquivalent: "r")
+            refreshItem.target = self
+            menu.addItem(refreshItem)
+            for provider in DisplayProvider.displayOrder {
+                let (title, selector, shown): (String, Selector, Bool) = switch provider {
+                case .claude: ("Show Claude", #selector(toggleShowClaude), viewModel.showClaude)
+                case .codex: ("Show Codex", #selector(toggleShowCodex), viewModel.showCodex)
+                case .cursor: ("Show Cursor", #selector(toggleShowCursor), viewModel.showCursor)
+                case .kimi: ("Show KimiCode", #selector(toggleShowKimi), viewModel.showKimi)
+                case .zai: ("Show Z.ai", #selector(toggleShowZai), viewModel.showZai)
+                case .xai: ("Show XAI", #selector(toggleShowXai), viewModel.showXai)
+                }
+                let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+                item.target = self
+                item.state = shown ? .on : .off
+                menu.addItem(item)
+            }
+        } else if !hasClaude && !hasCodex && !hasCursor && !hasZai && !hasXai && !hasKimi {
             let setupItem = NSMenuItem(title: "Setup Usage Tracking", action: #selector(showCredentialsWindow), keyEquivalent: "")
             setupItem.target = self
             menu.addItem(setupItem)
@@ -351,7 +374,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// open menu would be rebuilt.
     private func updatePanel() {
         guard isPanelOpen else { return }
-        panelModel.needsSetup = !viewModel.hasCredentials
+        panelModel.needsSetup = viewModel.source == .direct && !viewModel.hasCredentials
+        panelModel.emptyMessage = viewModel.source == .cpa ? (viewModel.cpaError ?? (viewModel.cpaAccounts.isEmpty ? "No supported accounts. Add accounts in CPA, then refresh." : nil)) : nil
         panelModel.cards = panelCards()
         panelModel.updateVersion = availableUpdateVersion
         panelModel.isRefreshing = viewModel.isLoading
@@ -374,6 +398,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func panelCards() -> [UsagePanelCard] {
+        if viewModel.source == .cpa {
+            return DisplayProvider.displayOrder.compactMap { provider in
+                let shown: Bool = switch provider {
+                case .claude: viewModel.showClaude
+                case .codex: viewModel.showCodex
+                case .cursor: viewModel.showCursor
+                case .kimi: viewModel.showKimi
+                case .zai: viewModel.showZai
+                case .xai: viewModel.showXai
+                }
+                let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
+                guard shown, !accounts.isEmpty else { return nil }
+                if accounts.count == 1, let account = accounts.first {
+                    return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
+                        UsagePanelRow(label: $0.label, percent: $0.percent, resetText: $0.resetText)
+                    }, message: cpaAccountMessage(account))
+                }
+                return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts)
+            }
+        }
         var cards: [UsagePanelCard] = []
 
         if viewModel.showClaude {
@@ -508,6 +552,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func statusBarButtonClicked() {
         togglePanel()
+    }
+
+    @objc private func showSourceSettings() {
+        if sourceWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 310),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Usagebar data source"
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: SourceSettingsView(viewModel: viewModel))
+            window.center()
+            sourceWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        sourceWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func showCredentialsWindow() {

@@ -44,6 +44,15 @@ final class UsageViewModel: ObservableObject {
     @Published var kimiAuthSource: KimiAuthSource = .none
     @Published var kimiError: String?
 
+    @Published private(set) var source: UsageSource = UsageSource(rawValue: UserDefaults.standard.string(forKey: "usageSource") ?? "") ?? .direct
+    @Published private(set) var cpaAccounts: [CPAAccount] = []
+    @Published private(set) var cpaError: String?
+    private var cpaClient: CPAClient?
+    private let makeCPAClient: @ProviderActor (CPAConnection) -> CPAClient
+    private var discoveryState = ProviderRefreshState()
+    private var sourceGeneration = UUID()
+    private var configurationGeneration = UUID()
+
     // MARK: - General
 
     @Published var isLoading: Bool = false
@@ -108,7 +117,8 @@ final class UsageViewModel: ObservableObject {
 
     @AppStorage("hasLaunchedBefore") private var hasLaunchedBefore = false
 
-    init(startAutomatically: Bool = true) {
+    init(startAutomatically: Bool = true, makeCPAClient: @escaping @ProviderActor (CPAConnection) -> CPAClient = { CPAClient(connection: $0) }) {
+        self.makeCPAClient = makeCPAClient
         guard startAutomatically else { return }
         observePowerState()
         Task { await requestRefresh() }
@@ -160,6 +170,10 @@ final class UsageViewModel: ObservableObject {
     }
 
     func providerSettingsChanged() {
+        if source == .cpa {
+            Task { await requestRefresh() }
+            return
+        }
         let targets = refreshTargets
         let added = targets.subtracting(knownTargets)
         knownTargets = targets
@@ -263,6 +277,10 @@ final class UsageViewModel: ObservableObject {
             isLoading = false
             NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
         }
+        if source == .cpa {
+            await refreshCPA(manual: manual)
+            return
+        }
         // Sign-ins are rare, so look for them at the hidden cadence unless asked.
         let checkInterval = UsageRefreshPolicy.interval(base: effectiveRefreshInterval, visible: false)
         if manual || lastCredentialCheck.map({ Date().timeIntervalSince($0) >= checkInterval }) ?? true {
@@ -351,6 +369,17 @@ final class UsageViewModel: ObservableObject {
         timer?.invalidate()
         timer = nil
         guard autoRefreshEnabled, !isBackgroundSuspended, refreshTask == nil else { return }
+        if source == .cpa {
+            let dates = [discoveryState.nextRefresh(interval: scheduledRefreshInterval)] + (cpaError == nil ? cpaAccounts.filter {
+                !$0.disabled && !$0.expired && enabledProviders.contains($0.provider)
+            }.map { $0.refresh.nextRefresh(interval: scheduledRefreshInterval) } : [])
+            let delay = max(1, (dates.min() ?? Date().addingTimeInterval(scheduledRefreshInterval)).timeIntervalSinceNow)
+            timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.requestRefresh() }
+            }
+            timer?.tolerance = min(delay * 0.1, effectiveRefreshInterval * 0.1)
+            return
+        }
         guard let next = refreshTargets.map({ refreshStates[$0, default: .init()].nextRefresh(interval: scheduledRefreshInterval) }).min()
         else { return }
         let delay = max(1, next.timeIntervalSinceNow)
@@ -447,6 +476,129 @@ final class UsageViewModel: ObservableObject {
             return "\(age) · retry in \(max(1, Int(ceil(retryAt.timeIntervalSince(now) / 60))))m"
         }
         return age
+    }
+
+    func testAndEnableCPA(address: String, key: String) async throws {
+        let operation = UUID()
+        configurationGeneration = operation
+        let connection = try CPAConnection(address: address, key: key)
+        let client = await makeCPAClient(connection)
+        _ = try await client.accounts() // An authenticated empty instance is valid.
+        try Task.checkCancellation()
+        guard configurationGeneration == operation else { throw CancellationError() }
+        try await CredentialStorage.shared.saveCPAConnection(connection)
+        guard configurationGeneration == operation else { throw CancellationError() }
+        await selectSource(.cpa, client: client)
+    }
+
+    func useDirectSource() async {
+        configurationGeneration = UUID()
+        await selectSource(.direct)
+    }
+
+    func useSavedCPA() async throws {
+        guard let connection = await CredentialStorage.shared.cpaConnection else {
+            throw CPAError.message("Configure a CPA connection first.")
+        }
+        try await testAndEnableCPA(address: connection.address, key: connection.key)
+    }
+
+    func clearCPAConfiguration() async throws {
+        configurationGeneration = UUID()
+        try await CredentialStorage.shared.saveCPAConnection(nil)
+        await selectSource(.direct)
+    }
+
+    private func selectSource(_ newSource: UsageSource, client: CPAClient? = nil) async {
+        let generation = UUID()
+        sourceGeneration = generation
+        refreshTask?.cancel()
+        if let refreshTask { await refreshTask.value }
+        guard generation == sourceGeneration else { return }
+        source = newSource
+        UserDefaults.standard.set(newSource.rawValue, forKey: "usageSource")
+        cpaClient = client
+        cpaAccounts = []
+        cpaError = nil
+        discoveryState = .init()
+        availableProviders = []
+        refreshStates = [:]
+        lastCredentialCheck = nil
+        lastUpdated = nil
+        knownTargets = []
+        usageData = .placeholder; codexUsageData = .placeholder
+        cursorUsageData = .placeholder; kimiUsageData = .placeholder
+        zaiUsageData = .placeholder; xaiUsageData = .placeholder
+        claudeAuthSource = .none; kimiAuthSource = .none
+        for provider in DisplayProvider.displayOrder { setError(nil, for: provider) }
+        await requestRefresh(manual: true)
+    }
+
+    private func refreshCPA(manual: Bool) async {
+        let generation = sourceGeneration
+        if cpaClient == nil, let connection = await CredentialStorage.shared.cpaConnection {
+            cpaClient = await makeCPAClient(connection)
+        }
+        guard !Task.isCancelled, generation == sourceGeneration else { return }
+        guard let client = cpaClient else {
+            cpaError = "Configure a CPA connection in Data source settings."
+            discoveryState.lastAttempt = Date()
+            return
+        }
+        if discoveryState.isDue(at: Date(), interval: scheduledRefreshInterval, manual: manual) {
+            discoveryState.lastAttempt = Date()
+            do {
+                let discovered = try await client.accounts()
+                guard !Task.isCancelled, generation == sourceGeneration else { return }
+                let previous = Dictionary(uniqueKeysWithValues: cpaAccounts.map { ($0.id, $0) })
+                cpaAccounts = discovered.map { account in
+                    var account = account
+                    if let old = previous[account.id], old.provider == account.provider, old.identity == account.identity {
+                        account.reading = old.reading
+                        account.refresh = old.refresh
+                        account.error = old.error
+                    }
+                    return account
+                }
+                availableProviders = Set(cpaAccounts.map(\.provider))
+                cpaError = nil
+                discoveryState.succeeded(at: Date())
+            } catch {
+                guard !Task.isCancelled, generation == sourceGeneration else { return }
+                cpaError = (error as? CPAError)?.errorDescription ?? "Could not connect to CPA. Check its address and transport settings."
+                discoveryState.failed(at: Date(), interval: effectiveRefreshInterval, serverRetryAt: (error as? CPAError)?.retryAfter)
+                // Rejected management credentials must not be resubmitted per account.
+                return
+            }
+        }
+        guard cpaError == nil else { return }
+        let due = cpaAccounts.filter {
+            !$0.disabled && !$0.expired && enabledProviders.contains($0.provider) &&
+            $0.refresh.isDue(at: Date(), interval: scheduledRefreshInterval, manual: manual)
+        }
+        await withTaskGroup(of: (String, CPAReading?, String?, Date?).self) { group in
+            for account in due {
+                if let index = cpaAccounts.firstIndex(where: { $0.id == account.id }) { cpaAccounts[index].refresh.lastAttempt = Date() }
+                group.addTask {
+                    do { return (account.id, try await client.usage(for: account), nil, nil) }
+                    catch { return (account.id, nil, (error as? CPAError)?.errorDescription ?? "Could not query this account.", (error as? CPAError)?.retryAfter) }
+                }
+            }
+            for await (id, reading, error, retry) in group {
+                guard !Task.isCancelled, generation == sourceGeneration,
+                      let index = cpaAccounts.firstIndex(where: { $0.id == id }) else { continue }
+                if let reading {
+                    cpaAccounts[index].reading = reading
+                    cpaAccounts[index].error = nil
+                    cpaAccounts[index].refresh.succeeded(at: Date())
+                } else {
+                    cpaAccounts[index].error = error
+                    cpaAccounts[index].refresh.failed(at: Date(), interval: effectiveRefreshInterval, serverRetryAt: retry)
+                }
+            }
+        }
+        guard !Task.isCancelled, generation == sourceGeneration else { return }
+        lastUpdated = cpaAccounts.compactMap { $0.refresh.lastSuccess }.max()
     }
 
     // MARK: - Credential changes

@@ -281,6 +281,11 @@ extension AppDelegate {
         liveHost.layoutSubtreeIfNeeded()
         let freshHost = NSHostingView(rootView: UsagePanelView(model: panelModel))
         FileHandle.standardError.write(Data("panel heights: tall \(tallHeight), shrunk \(liveHost.fittingSize.height), fresh \(freshHost.fittingSize.height)\n".utf8))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        liveHost.layoutSubtreeIfNeeded()
+        FileHandle.standardError.write(Data("after run loop: \(liveHost.fittingSize.height)\n".utf8))
+        liveHost.invalidateIntrinsicContentSize()
+        FileHandle.standardError.write(Data("after invalidate: \(liveHost.fittingSize.height), intrinsic \(liveHost.intrinsicContentSize.height)\n".utf8))
         precondition(liveHost.fittingSize.height < tallHeight - 100, "Panel kept its taller height after content shrank")
         precondition(abs(liveHost.fittingSize.height - freshHost.fittingSize.height) < 1,
                      "Panel height depends on earlier content")

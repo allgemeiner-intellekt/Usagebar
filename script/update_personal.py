@@ -214,8 +214,8 @@ def main():
             runs = api(f"actions/workflows/ci.yml/runs?head_sha={target}&per_page=20")["workflow_runs"]
             active = [r for r in runs if r["status"] != "completed"]
             if not active:
-                if runs:
-                    raise RuntimeError("Target CI finished without a usable artifact. Inspect its result before retrying.")
+                if runs and runs[0]["conclusion"] != "success":
+                    raise RuntimeError("Target CI did not succeed. Inspect its result before retrying.")
                 if not dispatched:
                     if commit_info(args.commit)[0] != target:
                         raise RuntimeError("Target ref moved before dispatch; rerun to select the new source.")

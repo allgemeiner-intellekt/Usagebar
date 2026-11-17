@@ -19,7 +19,7 @@ Use GitHub for compilation, regression tests, checks, and packaging where possib
 
 Run `python3 script/update_personal.py` from the repository. Requires Python 3, authenticated `gh`, and macOS. The command resolves personal main once, searches recent successful CI artifacts by source tree, verifies checksums and provenance, then installs and launches `/Applications/Usagebar.app`. It reuses a PR build when its actual packaged source tree equals the target, even when its run head SHA differs. The source commit and run are retained rather than relabelled as a new build.
 
-If no matching artifact exists, the command waits for target CI. If no target run exists, it dispatches CI for the selected ref. A failed or artifact-less completed run requires inspection rather than an automatic rebuild loop. `--no-wait` exits 2 when no matching artifact is available. `--commit REF` selects another source; automatic dispatch requires a branch or tag.
+If no matching artifact exists, the command waits for target CI. If no target run exists or a successful build's artifact has expired, it dispatches CI for the selected ref. A failed run requires inspection rather than an automatic rebuild loop. `--no-wait` exits 2 when no matching artifact is available. `--commit REF` selects another source; automatic dispatch requires a branch or tag.
 
 For inspection without installation:
 

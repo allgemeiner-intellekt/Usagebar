@@ -133,5 +133,28 @@ class InstallTests(unittest.TestCase):
             self.assertTrue((root / "Library/Application Support/Usagebar/PersonalUpdates/previous-Usagebar.zip").exists())
 
 
+class WaitTests(unittest.TestCase):
+    def test_expired_successful_build_is_dispatched_again(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(update.sys, "argv", ["update", "--download-only", "--output", tmp]), \
+                patch.object(update, "commit_info", return_value=(SOURCE, TREE)), \
+                patch.object(update, "retrieve", side_effect=[False, True]), \
+                patch.object(update, "api", return_value={"workflow_runs": [{"status": "completed", "conclusion": "success"}]}), \
+                patch.object(update.time, "sleep"), patch.object(update, "run") as command:
+            self.assertEqual(update.main(), 0)
+            command.assert_called_once_with("gh", "workflow", "run", "ci.yml", "--repo", update.REPO, "--ref", "main")
+
+    def test_failed_build_is_not_retried_automatically(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(update.sys, "argv", ["update", "--download-only", "--output", tmp]), \
+                patch.object(update, "commit_info", return_value=(SOURCE, TREE)), \
+                patch.object(update, "retrieve", return_value=False), \
+                patch.object(update, "api", return_value={"workflow_runs": [{"status": "completed", "conclusion": "failure"}]}), \
+                patch.object(update, "run") as command:
+            with self.assertRaisesRegex(RuntimeError, "did not succeed"):
+                update.main()
+            command.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

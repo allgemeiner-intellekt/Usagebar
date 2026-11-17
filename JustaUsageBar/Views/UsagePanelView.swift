@@ -61,51 +61,65 @@ final class UsagePanelModel: ObservableObject {
     var onQuit: () -> Void = {}
 }
 
-private struct PanelContentHeight: PreferenceKey {
-    static let defaultValue: CGFloat = 300
+/// Sizes its single child (the card scroll view) to the child's ideal height,
+/// capped at `maxHeight`. Doing this in one layout pass keeps the panel from
+/// holding a stale, taller height after its content shrinks.
+private struct CappedHeightLayout: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let ideal = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: proposal.width ?? ideal.width, height: min(ideal.height, maxHeight))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+private struct PanelHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 struct UsagePanelView: View {
     @ObservedObject var model: UsagePanelModel
 
-    @State private var contentHeight: CGFloat = 300
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                if model.needsSetup {
-                    setup
-                } else if let message = model.emptyMessage, model.cards.isEmpty {
-                    Text(message).foregroundStyle(.secondary).padding(10)
-                } else {
-                    if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
-                    VStack(spacing: 6) {
-                        ForEach(model.cards) { card in
-                            UsagePanelCardView(
-                                card: card,
-                                model: model
-                            )
-                        }
-                    }
-                }
-                }
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: PanelContentHeight.self, value: geometry.size.height)
-                })
-            }
-            .frame(height: min(contentHeight, model.maximumContentHeight))
-            .onPreferenceChange(PanelContentHeight.self) {
-                contentHeight = $0
-                model.onResize()
+            CappedHeightLayout(maxHeight: model.maximumContentHeight) {
+                ScrollView { content }
             }
             footer
         }
         .padding(8)
         .frame(width: 340)
         .font(.system(size: 13))
+        // SwiftUI applies model changes on a later run-loop pass, so the window
+        // refits when the laid-out height changes rather than when the model does.
+        .background(GeometryReader { geometry in
+            Color.clear.preference(key: PanelHeight.self, value: geometry.size.height)
+        })
+        .onPreferenceChange(PanelHeight.self) { _ in model.onResize() }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.needsSetup {
+                setup
+            } else if let message = model.emptyMessage, model.cards.isEmpty {
+                Text(message).foregroundStyle(.secondary).padding(10)
+            } else {
+                if let message = model.emptyMessage { Text(message).foregroundStyle(.secondary).padding(6) }
+                VStack(spacing: 6) {
+                    ForEach(model.cards) { card in
+                        UsagePanelCardView(card: card, model: model)
+                    }
+                }
+            }
+        }
     }
 
     private var header: some View {

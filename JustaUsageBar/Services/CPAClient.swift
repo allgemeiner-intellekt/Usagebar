@@ -215,7 +215,7 @@ final class CPAClient {
                       let used = number(object["used"]) ?? number(object["remaining"]).map({ limit - $0 }) else { return nil }
                 return window(label, used / limit * 100, object["resetTime"] ?? object["reset_at"])
             }
-            if let usage = root["usage"] as? [String: Any], let value = detail("7d", usage) { windows.append(value) }
+            // Short windows come before the weekly one, matching Claude's 5h-then-7d order.
             for entry in root["limits"] as? [[String: Any]] ?? [] {
                 guard let limit = entry["window"] as? [String: Any],
                       let duration = number(limit["duration"]),
@@ -232,6 +232,7 @@ final class CPAClient {
                 guard let label = durationLabel(seconds: duration * scale) else { continue }
                 if let value = detail(label, object) { windows.append(value) }
             }
+            if let usage = root["usage"] as? [String: Any], let value = detail("7d", usage) { windows.append(value) }
         case .xai:
             let config = root["config"] as? [String: Any] ?? root
             let products = config["productUsage"] as? [[String: Any]] ?? []

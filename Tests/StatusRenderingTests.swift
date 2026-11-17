@@ -269,6 +269,19 @@ extension AppDelegate {
             host.layoutSubtreeIfNeeded()
             precondition(host.fittingSize.height <= panelModel.maximumContentHeight + 120, "Multi-account panel exceeded screen cap")
         }
+        // Shrinking content must shrink the open panel window, not leave a blank gap.
+        // SwiftUI applies model changes on a later run-loop pass, so let it run.
+        panel.setFrame(NSRect(x: 0, y: 0, width: 340, height: 300), display: false)
+        panel.orderFrontRegardless()
+        panel.fitContent()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let tallHeight = panel.frame.height
+        viewModel.useCPAAccountFixtures([accounts[0]])
+        updatePanel()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let freshHeight = NSHostingView(rootView: UsagePanelView(model: panelModel)).fittingSize.height
+        precondition(panel.frame.height < tallHeight - 100, "Panel kept its taller height after content shrank")
+        precondition(abs(panel.frame.height - freshHeight) < 1, "Panel height depends on earlier content")
         panel.close()
     }
 }

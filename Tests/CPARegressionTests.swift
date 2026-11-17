@@ -109,7 +109,7 @@ extension PerformanceRegressionTests {
         do { _ = try await CPAClient.parse(huge, provider: .codex); fatalError("Oversized duration accepted") } catch {}
         let kimi = Data("{\"usage\":{\"used\":1,\"limit\":10},\"limits\":[{\"window\":{\"duration\":300,\"timeUnit\":\"TIME_UNIT_MINUTE\"},\"detail\":{\"used\":2,\"limit\":10}}]}".utf8)
         let kimiReading = try await CPAClient.parse(kimi, provider: .kimi)
-        check(kimiReading.windows.last?.label == "5h", "Kimi minute duration was not normalized")
+        check(kimiReading.windows.map(\.label) == ["5h", "7d"], "Kimi windows must list 5h before 7d, like Claude")
         check(CPAWindow(label: "x", percent: 0, reset: Date(timeIntervalSince1970: 1e100)).resetText == "--", "Unbounded reset")
 
         let regional = await CPAClient(connection: connection, send: { request in

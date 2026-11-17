@@ -8,7 +8,7 @@ python3 script/update_personal.py
 
 The updater reuses a verified successful CI artifact when its source tree matches personal main. Otherwise it waits for target CI or dispatches a missing build. Installation includes a backup and rollback on startup failure. See [cloud-build](../.agents/skills/cloud-build/SKILL.md) for requirements, options, provenance, and installation limits.
 
-The [CI workflow](../.github/workflows/ci.yml) builds PRs and manually dispatched refs. Main pushes reuse an equivalent validated artifact when available, or run the full build and regression tests. The Actions summary links to the original artifact download. Reuse preserves the source commit and the original 30-day expiry.
+The [CI workflow](../.github/workflows/ci.yml) checks infrastructure changes without compiling the app. Application changes and manual dispatches run the full build and regression tests. For application changes on main, it reuses an equivalent validated artifact when available. The Actions summary links to the original artifact download. Reuse preserves the source commit and the original 30-day expiry.
 
 ## Optional durable releases
 

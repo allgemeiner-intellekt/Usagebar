@@ -5,8 +5,8 @@ app="build/DerivedData/Build/Products/Release/Usagebar.app"
 output="build/Artifact"
 test -d "$app"
 architectures="$(xcrun lipo -archs "$app/Contents/MacOS/Usagebar")"
-[[ " $architectures " == *" arm64 "* ]]
-[[ " $architectures " == *" x86_64 "* ]]
+case " $architectures " in *" arm64 "*) ;; *) echo 'Missing arm64 architecture' >&2; exit 1 ;; esac
+case " $architectures " in *" x86_64 "*) ;; *) echo 'Missing x86_64 architecture' >&2; exit 1 ;; esac
 codesign --verify --deep --strict "$app"
 mkdir -p "$output"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$output/Usagebar.zip"
@@ -15,8 +15,14 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$output/Usagebar.zip"
     echo "tree=$(git rev-parse 'HEAD^{tree}')"
     echo "run=${GITHUB_SERVER_URL:?}/${GITHUB_REPOSITORY:?}/actions/runs/${GITHUB_RUN_ID:?}"
     echo "architectures=$architectures"
-    echo "version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
-    echo "build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
+    python3 - "$app/Contents/Info.plist" <<'PY'
+import plistlib
+import sys
+with open(sys.argv[1], 'rb') as handle:
+    info = plistlib.load(handle)
+print(f"version={info['CFBundleShortVersionString']}")
+print(f"build={info['CFBundleVersion']}")
+PY
 } > "$output/build-info.txt"
 cd "$output"
 shasum -a 256 Usagebar.zip build-info.txt > SHA256SUMS

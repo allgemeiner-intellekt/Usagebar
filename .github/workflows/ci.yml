@@ -15,20 +15,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build macOS app
-    # Use the standard Intel pool to avoid macOS arm64 runner capacity failures.
-    # xcodebuild still produces the universal arm64/x86_64 app below.
-    runs-on: macos-15-intel
-    timeout-minutes: 20
+  tooling:
+    name: Check update tooling and build scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app_required: ${{ steps.scope.outputs.app_required }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check personal update tooling
         run: |
           python3 -m unittest discover -s script/tests -p 'test_*.py'
           bash -n script/package_artifact.sh
           git diff --check
+      - name: Select validation scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [[ "$BASE" =~ ^0+$ ]]; then
+            echo 'app_required=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "app_required=$(python3 script/ci_scope.py "$BASE" "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Compile and test macOS app
+    needs: tooling
+    if: needs.tooling.outputs.app_required == 'true'
+    # Use the standard Intel pool; xcodebuild produces both architectures.
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
       - name: Reuse validated source on main
         id: reuse
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -95,3 +119,23 @@ jobs:
           path: build/Artifact/
           if-no-files-found: error
           retention-days: 30
+
+  result:
+    # Keep the existing required check stable, including for infrastructure-only PRs.
+    name: Build macOS app
+    needs: [tooling, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify required checks
+        env:
+          TOOLING: ${{ needs.tooling.result }}
+          APP: ${{ needs.build.result }}
+        run: |
+          test "$TOOLING" = success
+          if [ "$APP" = skipped ]; then
+            echo 'Infrastructure checks passed; no app build required.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            test "$APP" = success
+          fi

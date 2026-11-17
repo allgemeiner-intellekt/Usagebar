@@ -33,7 +33,7 @@ The app is ad hoc signed, not notarized. Preserve quarantine; if macOS blocks la
 
 ## CI and artifact matching
 
-`ci.yml` builds and tests PRs and manually dispatched refs. Main pushes first run tooling checks, then try to reuse a successful same-repository CI artifact with the exact source tree; without a match they build and test normally. A reused build links to the original run in the Actions summary and keeps its original retention deadline. Artifacts remain available for 30 days. Expired or older artifacts outside the bounded recent-run search require a fresh build.
+`ci.yml` always checks update tooling. Infrastructure and documentation changes skip app compilation; app source, Xcode project, application regression tests, and unknown paths require a full build. Manual dispatch always requests a full build. For build-relevant main pushes, CI first tries to reuse a successful same-repository artifact with the exact source tree; without a match it builds and tests normally. Workflow build-command or toolchain changes can be validated with manual dispatch. A reused build links to the original run in the Actions summary and keeps its original retention deadline. Artifacts remain available for 30 days. Expired or older artifacts outside the bounded recent-run search require a fresh build.
 
 `script/package_artifact.sh` records the actual checkout commit, tree, run, architectures, version and build in `build-info.txt`. GitHub PR runs may report the branch head while checkout builds a temporary merge commit. Match the packaged commit's tree, not just the run head SHA. Older artifacts without a tree field remain usable after resolving their recorded commit through GitHub. Never select an artifact solely because it is the latest run.
 

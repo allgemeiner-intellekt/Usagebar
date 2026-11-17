@@ -269,6 +269,18 @@ extension AppDelegate {
             host.layoutSubtreeIfNeeded()
             precondition(host.fittingSize.height <= panelModel.maximumContentHeight + 120, "Multi-account panel exceeded screen cap")
         }
+        // Shrinking content must shrink the same live panel, not leave a blank gap.
+        let liveHost = NSHostingView(rootView: UsagePanelView(model: panelModel))
+        liveHost.setFrameSize(liveHost.fittingSize)
+        liveHost.layoutSubtreeIfNeeded()
+        let tallHeight = liveHost.fittingSize.height
+        viewModel.useCPAAccountFixtures([accounts[0]])
+        updatePanel()
+        liveHost.layoutSubtreeIfNeeded()
+        let freshHost = NSHostingView(rootView: UsagePanelView(model: panelModel))
+        precondition(liveHost.fittingSize.height < tallHeight - 100, "Panel kept its taller height after content shrank")
+        precondition(abs(liveHost.fittingSize.height - freshHost.fittingSize.height) < 1,
+                     "Panel height depends on earlier content")
         panel.close()
     }
 }

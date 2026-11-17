@@ -12,6 +12,7 @@ mkdir -p "$output"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$output/Usagebar.zip"
 {
     echo "commit=$(git rev-parse HEAD)"
+    echo "tree=$(git rev-parse 'HEAD^{tree}')"
     echo "run=${GITHUB_SERVER_URL:?}/${GITHUB_REPOSITORY:?}/actions/runs/${GITHUB_RUN_ID:?}"
     echo "architectures=$architectures"
     echo "version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
@@ -19,3 +20,12 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$output/Usagebar.zip"
 } > "$output/build-info.txt"
 cd "$output"
 shasum -a 256 Usagebar.zip build-info.txt > SHA256SUMS
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+        echo '## Personal build'
+        echo '```text'
+        cat build-info.txt
+        echo '```'
+        echo "[Download artifacts](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}#artifacts)"
+    } >> "$GITHUB_STEP_SUMMARY"
+fi

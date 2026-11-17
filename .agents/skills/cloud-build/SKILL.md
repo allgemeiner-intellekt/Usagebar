@@ -15,15 +15,28 @@ Use GitHub for compilation, regression tests, checks, and packaging where possib
 - User download entry: https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml . Open a successful run and its Artifacts section. GitHub sign-in is required for Actions artifact downloads; artifacts expire according to workflow retention.
 - `docs/RELEASING.md` describes optional durable tagged releases. Routine personal builds need no version tag or Homebrew tap.
 
-## Run and retrieve
+## Update the installed app
 
-1. Push the intended source branch to the personal fork. Main pushes trigger CI; dispatch `ci.yml` with `gh workflow run ci.yml --repo allgemeiner-intellekt/Usagebar --ref BRANCH` for other branches. The dispatch-enabled workflow must first exist on the default branch.
-2. Find the run with `gh run list --repo allgemeiner-intellekt/Usagebar --workflow ci.yml --commit COMMIT_SHA`. Inspect the selected run's `headSha`, event, status, and conclusion with `gh run view`. Watch that run, and inspect failing job logs if needed. Do not choose by “latest” alone.
-3. Download that run's artifact with `gh run download RUN_ID --repo allgemeiner-intellekt/Usagebar --dir DESTINATION`. Check `build-info.txt` against the intended full commit SHA and run URL, and verify `shasum -a 256 -c SHA256SUMS` inside the download directory before using `Usagebar.zip`.
-4. The inner archive contains `Usagebar.app` for macOS 14+, Apple Silicon and Intel. It is ad hoc signed, not notarized; macOS may require explicit user approval to open it. Do not remove quarantine as part of artifact retrieval.
+Run `python3 script/update_personal.py` from the repository. Requires Python 3, authenticated `gh`, and macOS. The command resolves personal main once, searches recent successful CI artifacts by source tree, verifies checksums and provenance, then installs and launches `/Applications/Usagebar.app`. It reuses a PR build when its actual packaged source tree equals the target, even when its run head SHA differs. The source commit and run are retained rather than relabelled as a new build.
 
-Updates are manual, optionally assisted by an agent when requested. Quit the installed app before replacement, keep one installed copy, and verify its version/source afterward. App update actions open the personal Actions page and never install an upstream Homebrew build. An existing Homebrew-managed installation can still be overwritten by an external `brew upgrade`; resolve that ownership when installation is requested, without deleting preferences or credentials. Setup itself does not install or restart the app.
+If no matching artifact exists, the command waits for target CI. If no target run exists, it dispatches CI for the selected ref. A failed or artifact-less completed run requires inspection rather than an automatic rebuild loop. `--no-wait` exits 2 when no matching artifact is available. `--commit REF` selects another source; automatic dispatch requires a branch or tag.
 
-## Verification status
+For inspection without installation:
 
-Setup configuration is on `codex/personal-fork-setup`. Workflow YAML parsing, shell syntax, documentation links, and diff whitespace checks passed. The personal repository has Actions enabled. Full GitHub build, artifact download, and runtime validation have not yet run for this setup. The owner deferred cloud execution until product changes are ready. Default-branch workflow availability must be checked before dispatch. A successful build alone does not prove menu interactions work.
+```sh
+python3 script/update_personal.py --download-only --no-wait --output build/personal-download
+```
+
+Installation verifies the universal app signature and version, quits the old process, replaces the bundle, and observes startup. A failed replacement or launch restores the previous app. Receipts and the previous app ZIP live outside the signed bundle, in `~/Library/Application Support/Usagebar/PersonalUpdates/`. Preferences and credentials are preserved. Homebrew ownership or a second installed copy must be resolved before installation; the command stops with an explanation.
+
+The app is ad hoc signed, not notarized. Preserve quarantine; if macOS blocks launch, handle the system approval explicitly. Startup survival does not prove panel interactions work.
+
+## CI and artifact matching
+
+`ci.yml` builds and tests PRs and manually dispatched refs. Main pushes first run tooling checks, then try to reuse a successful same-repository CI artifact with the exact source tree; without a match they build and test normally. A reused build links to the original run in the Actions summary and keeps its original retention deadline. Artifacts remain available for 30 days. Expired or older artifacts outside the bounded recent-run search require a fresh build.
+
+`script/package_artifact.sh` records the actual checkout commit, tree, run, architectures, version and build in `build-info.txt`. GitHub PR runs may report the branch head while checkout builds a temporary merge commit. Match the packaged commit's tree, not just the run head SHA. Older artifacts without a tree field remain usable after resolving their recorded commit through GitHub. Never select an artifact solely because it is the latest run.
+
+Main protection requires a PR and the GitHub Actions `Build macOS app` check, including administrators, with zero required approving reviews. Force pushes and deletion are disabled. Merged branches are deleted automatically. Keep the check name stable when editing CI.
+
+App update actions open the personal Actions page; they do not install upstream Homebrew builds. Routine personal updates need no version tag or Homebrew tap. Use `docs/RELEASING.md` only for durable tagged releases.

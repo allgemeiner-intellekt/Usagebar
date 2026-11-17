@@ -1,8 +1,14 @@
 # Personal builds and releases
 
-Routine personal builds use the [CI workflow](../.github/workflows/ci.yml). Push to `main`, open a pull request, or manually dispatch the workflow for a pushed branch. It runs regression tests, builds a universal Release app, verifies signatures and architectures, and uploads an artifact named for the workflow commit. No release tag or Homebrew tap is required.
+For routine personal updates, run:
 
-Open [personal CI](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml), select a successful run for the intended source, and download its artifact. Follow [cloud-build](../.agents/skills/cloud-build/SKILL.md) for run matching, checksum verification, and update limitations. For pull requests, the workflow commit can be GitHub's merge commit; verify the recorded source rather than assuming it is the branch head.
+```sh
+python3 script/update_personal.py
+```
+
+The updater reuses a verified successful CI artifact when its source tree matches personal main. Otherwise it waits for target CI or dispatches a missing build. Installation includes a backup and rollback on startup failure. See [cloud-build](../.agents/skills/cloud-build/SKILL.md) for requirements, options, provenance, and installation limits.
+
+The [CI workflow](../.github/workflows/ci.yml) builds PRs and manually dispatched refs. Main pushes reuse an equivalent validated artifact when available, or run the full build and regression tests. The Actions summary links to the original artifact download. Reuse preserves the source commit and the original 30-day expiry.
 
 ## Optional durable releases
 

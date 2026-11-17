@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -23,11 +24,43 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Check personal update tooling
+        run: |
+          python3 -m unittest discover -s script/tests -p 'test_*.py'
+          bash -n script/package_artifact.sh
+          git diff --check
+      - name: Reuse validated source on main
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python3 script/update_personal.py --commit "$GITHUB_SHA" --download-only --no-wait --output build/Artifact
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'found=true' >> "$GITHUB_OUTPUT"
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          source = json.loads(Path('build/Artifact/selection.json').read_text())
+          print('## Reused validated personal build')
+          print(f"Source tree: `{source['tree']}`")
+          print(f"[Download original artifacts]({source['run']}#artifacts)")
+          PY
+          elif [ "$status" -eq 2 ]; then
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
       - name: Select Xcode
+        if: steps.reuse.outputs.found != 'true'
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app
           xcodebuild -version
       - name: Build
+        if: steps.reuse.outputs.found != 'true'
         run: |
           xcodebuild \
             -project JustaUsageBar.xcodeproj \
@@ -38,6 +71,7 @@ jobs:
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=- \
             build
       - name: Verify install and update safeguards
+        if: steps.reuse.outputs.found != 'true'
         run: |
           app="build/DerivedData/Build/Products/Release/Usagebar.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$app/Contents/Info.plist")" = "true"
@@ -46,12 +80,15 @@ jobs:
           ruby -c Casks/usagebar.rb
           ruby -rjson -e 'abort unless JSON.parse(File.read("cask_renames.json")) == {"justausagebar" => "usagebar"}'
       - name: Run performance and rendering regression tests
+        if: steps.reuse.outputs.found != 'true'
         env:
           USAGEBAR_RENDER_OUTPUT: ${{ github.workspace }}/build/Artifact/status-preview.png
         run: ./script/test_performance.sh
       - name: Package personal build
+        if: steps.reuse.outputs.found != 'true'
         run: bash script/package_artifact.sh
       - name: Upload personal build
+        if: steps.reuse.outputs.found != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Usagebar-macos-universal-${{ github.sha }}

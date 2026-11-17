@@ -313,6 +313,16 @@ extension PerformanceRegressionTests {
         let before = box.calls.count
         _ = try await client.usage(for: account)
         check(box.calls.count == before + 1, "Reset grants ignored server cooldown or blocked usage")
+        var row = account
+        row.reading = malformed
+        check(row.resetInventoryUnavailable, "Multi-account rows must distinguish failed grant reads from zero")
+        row.reading = reading
+        check(!row.resetInventoryUnavailable, "Grant reads were reported as unavailable")
+        row.reading = nil
+        check(!row.resetInventoryUnavailable, "Accounts without usage must not report reset failures")
+        let kimiRow = CPAAccount(id: "k", provider: .kimi, identity: "k", disabled: false, expired: false,
+                                 reading: CPAReading(windows: []))
+        check(!kimiRow.resetInventoryUnavailable, "Providers without resets must not report them unavailable")
         print("PASS: Claude reset grants, validation, CPA transport, usage fallback and cooldown")
     }
 }

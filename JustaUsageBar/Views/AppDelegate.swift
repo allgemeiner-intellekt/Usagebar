@@ -415,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
                         UsagePanelRow(label: $0.label, percent: $0.percent, resetText: $0.resetText)
                     }, message: cpaAccountMessage(account), bankedResets: account.reading?.bankedResets,
-                    tracksBankedResets: provider == .codex || provider == .claude)
+                    tracksBankedResets: account.provider == .codex || account.provider == .claude)
                 }
                 return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts)
             }

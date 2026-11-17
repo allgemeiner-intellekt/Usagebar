@@ -168,7 +168,6 @@ struct UsagePanelCardView: View {
     let card: UsagePanelCard
     @ObservedObject var model: UsagePanelModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showsResetDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -182,36 +181,27 @@ struct UsagePanelCardView: View {
                 }
                 Spacer(minLength: 4)
                 if card.showsBankedResets, let resets = card.bankedResets {
-                    Button {
-                        showsResetDetails.toggle()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text("\(resets.availableCount) banked \(resets.availableCount == 1 ? "reset" : "resets")")
-                            Image(systemName: "chevron.down").font(.system(size: 9))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .help("View banked reset expiration dates")
-                    .accessibilityIdentifier("banked-reset-details")
-                    .popover(isPresented: $showsResetDetails, arrowEdge: .bottom) {
-                        BankedResetDetailsView(resets: resets)
-                    }
+                    BankedResetCountButton(resets: resets)
                 } else if card.resetInventoryUnavailable {
-                    Text("Resets unavailable")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    BankedResetUnavailableText()
                 }
             }
             .frame(height: 18)
 
             ForEach(card.accounts) { account in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("\(account.identity) · \(account.id)")
-                        .font(.system(size: 12, weight: .medium))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(account.identity) · \(account.id)")
+                            .font(.system(size: 12, weight: .medium))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        if let resets = account.reading?.bankedResets, resets.availableCount > 0 {
+                            BankedResetCountButton(resets: resets)
+                        } else if account.resetInventoryUnavailable {
+                            BankedResetUnavailableText()
+                        }
+                    }
                     if let plan = account.reading?.plan, !plan.isEmpty { Text(plan).font(.system(size: 12)).foregroundStyle(.secondary) }
                     ForEach(account.reading?.windows ?? []) { window in
                         HStack(spacing: 7) {
@@ -277,7 +267,6 @@ struct UsagePanelCardView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(stroke, lineWidth: 1)
         )
-        .onChange(of: card.bankedResets) { _, _ in showsResetDetails = false }
     }
 
     @ViewBuilder private var mark: some View {
@@ -330,6 +319,42 @@ struct UsagePanelCardView: View {
 
     private var stroke: Color {
         colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.07)
+    }
+}
+
+/// Positive count in a card or account title row; opens every reset with its expiry.
+struct BankedResetCountButton: View {
+    let resets: BankedResets
+    @State private var showsDetails = false
+
+    var body: some View {
+        Button {
+            showsDetails.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Text("\(resets.availableCount) banked \(resets.availableCount == 1 ? "reset" : "resets")")
+                Image(systemName: "chevron.down").font(.system(size: 9))
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .fixedSize()
+        .help("View banked reset expiration dates")
+        .accessibilityIdentifier("banked-reset-details")
+        .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
+            BankedResetDetailsView(resets: resets)
+        }
+        .onChange(of: resets) { _, _ in showsDetails = false }
+    }
+}
+
+struct BankedResetUnavailableText: View {
+    var body: some View {
+        Text("Resets unavailable")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize()
     }
 }
 

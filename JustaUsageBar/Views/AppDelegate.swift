@@ -414,7 +414,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if accounts.count == 1, let account = accounts.first {
                     return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
                         UsagePanelRow(label: $0.label, percent: $0.percent, resetText: $0.resetText)
-                    }, message: cpaAccountMessage(account), bankedResets: account.reading?.bankedResets)
+                    }, message: cpaAccountMessage(account), bankedResets: account.reading?.bankedResets,
+                    tracksBankedResets: account.provider == .codex || account.provider == .claude)
                 }
                 return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts)
             }
@@ -465,7 +466,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 cards.append(UsagePanelCard(
                     provider: .codex, detail: detail, rows: rows, message: error,
                     actionTitle: error != nil && shouldPromptCodexAuthentication ? "How to authenticate Codex" : nil,
-                    bankedResets: codex.bankedResets
+                    bankedResets: codex.bankedResets,
+                    tracksBankedResets: true
                 ))
             } else {
                 cards.append(UsagePanelCard(

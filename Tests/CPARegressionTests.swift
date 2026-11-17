@@ -217,6 +217,116 @@ extension PerformanceRegressionTests {
     @ProviderActor private static func setFailDiscovery() { CPAFixture.failDiscovery = true }
 }
 
+/// Calls happen one at a time, serialized by the awaits in the test.
+nonisolated final class ClaudeGrantFixture: @unchecked Sendable {
+    var calls: [[String: Any]] = []
+    var inventory: (Int, String) = (200, "")
+}
+
+extension PerformanceRegressionTests {
+    /// Fixture payloads follow the CPA management panel's `cedar_ember` contract.
+    @MainActor static func testClaudeBankedResets() async throws {
+        let now = ISO8601Timestamp.date(from: "2026-11-17T00:00:00Z")!
+        func block(_ json: String) -> Data { Data("{\"cedar_ember\":\(json)}".utf8) }
+        let grants = block(#"""
+        {"eligible":true,"ineligible_reason":null,"at_limit":false,"cooldown_until":null,"weekly_resets_at":"2026-11-20T00:00:00Z",
+         "next_grant_id":"nov","grants":[
+          {"id":"later","type":"session","resets_total":2,"resets_left":2,"ends_at":"2026-12-20T00:00:00Z","clears":["five_hour"]},
+          {"id":"nov","type":"full","label":" Fable\u0007 5.2\n launch ","resets_total":1,"resets_left":1,"starts_at":"2026-11-10T21:59:00Z",
+           "ends_at":"2026-12-10T22:00:00Z","clears":["five_hour","seven_day"],"paused":false,"usable_now":true,"use_requires_limit":true},
+          {"id":"refill","type":"weekly","resets_total":1,"resets_left":1,"gives_back_weekly":true},
+          {"id":"spent","type":"weekly","resets_total":1,"resets_left":0,"ends_at":"2026-12-01T00:00:00Z"},
+          {"id":"gone","type":"weekly","resets_total":1,"resets_left":1,"ends_at":"2026-10-22T16:00:00Z"}
+        ]}
+        """#)
+        let parsed = try BankedResets.parseClaude(grants, now: now)
+        check(parsed.availableCount == 4, "Claude count must sum unexpired resets left")
+        check(parsed.grants?.map(\.id) == ["nov", "later", "refill"], "Grants must sort by expiry with unknown dates last")
+        check(parsed.grants?.first?.label == "Fable 5.2 launch", "Grant label was not sanitized")
+        check(parsed.grants?.map(\.kind) == [.full, .session, .fable], "Grant kind changed")
+        check(parsed.grants?.last?.expiration == .unknown, "Missing end date must be unknown, not permanent")
+        let entries = parsed.entries!
+        check(entries.first?.title == "Full reset · Fable 5.2 launch" && entries.first?.detail == "1 / 1 left", "Grant row text changed")
+        check(entries.map(\.count) == [1, 2, 1], "Grant rows must count resets left")
+
+        let ineligible = try BankedResets.parseClaude(block(#"{"eligible":false,"ineligible_reason":"tier","grants":[{"id":"a","resets_total":1,"resets_left":1}]}"#), now: now)
+        check(ineligible.availableCount == 0, "Ineligible accounts must hide resets")
+        let none = try BankedResets.parseClaude(block(#"{"eligible":true}"#), now: now)
+        check(none.availableCount == 0 && none.entries?.isEmpty == true, "Missing grants must mean zero")
+        for invalid in [
+            #"{"five_hour":{"utilization":1}}"#,
+            #"{"cedar_ember":{"eligible":1}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":{}}}"#,
+            #"{"cedar_ember":{"eligible":true,"cooldown_until":"soon"}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1,"resets_left":2}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1,"resets_left":true}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1.5,"resets_left":1}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"A b","resets_total":1,"resets_left":1}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1,"resets_left":1},{"id":"a","resets_total":1,"resets_left":1}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1,"resets_left":1,"ends_at":"never"}]}}"#,
+            #"{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_total":1,"resets_left":1,"paused":"no"}]}}"#
+        ] {
+            do {
+                _ = try BankedResets.parseClaude(Data(invalid.utf8), now: now)
+                preconditionFailure("Malformed reset grants must be unavailable, not zero: \(invalid)")
+            } catch {}
+        }
+
+        // CPA transport: account-pinned GET with Claude Code identity, failure keeps usage, own cooldown.
+        let usage = #"{"five_hour":{"utilization":40,"resets_at":"2026-11-17T03:00:00Z"},"seven_day":{"utilization":10}}"#
+        let box = ClaudeGrantFixture()
+        box.inventory = (200, String(data: grants, encoding: .utf8)!)
+        let connection = try CPAConnection(address: "https://example.invalid", key: "fixture-key")
+        let client = await CPAClient(connection: connection, send: { request in
+            let response: [String: Any]
+            if let body = request.httpBody {
+                let call = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+                box.calls.append(call)
+                precondition(call["method"] as? String == "GET", "Reset grants must only be read")
+                if (call["url"] as? String)?.contains("cedar_ember") == true {
+                    response = ["status_code": box.inventory.0, "header": ["Retry-After": ["600"]], "body": box.inventory.1]
+                } else {
+                    response = ["status_code": 200, "body": usage]
+                }
+            } else {
+                response = ["files": [["auth_index": "claude-a", "provider": "claude", "email": "a@example.invalid"]]]
+            }
+            return (try JSONSerialization.data(withJSONObject: response), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let account = try await client.accounts()[0]
+        let reading = try await client.usage(for: account)
+        check(reading.windows.map(\.percent) == [40, 10], "Reset grants changed Claude usage")
+        check(reading.bankedResets?.grants?.first?.id == "nov", "CPA Claude reading lost reset grants")
+        let call = box.calls.last!
+        let headers = call["header"] as? [String: String] ?? [:]
+        check(call["url"] as? String == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1", "Reset grant endpoint changed")
+        check(call["auth_index"] as? String == "claude-a" && headers["Authorization"] == "Bearer $TOKEN$", "Reset grants lost account context")
+        check(headers["anthropic-beta"] == "oauth-2025-04-20" && headers["User-Agent"]?.hasPrefix("claude-cli/") == true, "Reset grants lost Claude Code headers")
+        check(!box.calls.contains { ($0["url"] as? String)?.contains("reset_rate_limits") == true }, "Reset grants must never be redeemed")
+
+        box.inventory = (200, #"{"cedar_ember":{"eligible":"yes"}}"#)
+        let malformed = try await client.usage(for: account)
+        check(malformed.windows.count == 2 && malformed.bankedResets == nil, "Malformed grants must keep usage and show unavailable")
+        box.inventory = (429, "{}")
+        let limited = try await client.usage(for: account)
+        check(limited.windows.count == 2 && limited.bankedResets == nil, "Grant rate limit discarded usage")
+        let before = box.calls.count
+        _ = try await client.usage(for: account)
+        check(box.calls.count == before + 1, "Reset grants ignored server cooldown or blocked usage")
+        var row = account
+        row.reading = malformed
+        check(row.resetInventoryUnavailable, "Multi-account rows must distinguish failed grant reads from zero")
+        row.reading = reading
+        check(!row.resetInventoryUnavailable, "Grant reads were reported as unavailable")
+        row.reading = nil
+        check(!row.resetInventoryUnavailable, "Accounts without usage must not report reset failures")
+        let kimiRow = CPAAccount(id: "k", provider: .kimi, identity: "k", disabled: false, expired: false,
+                                 reading: CPAReading(windows: []))
+        check(!kimiRow.resetInventoryUnavailable, "Providers without resets must not report them unavailable")
+        print("PASS: Claude reset grants, validation, CPA transport, usage fallback and cooldown")
+    }
+}
+
 extension UsageViewModel {
     fileprivate func refreshIfStaleForCPA() async { await requestRefresh() }
 }

@@ -27,11 +27,13 @@ struct UsagePanelCard: Identifiable {
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
     var accounts: [CPAAccount] = []
-    var bankedResets: CodexBankedResets?
+    var bankedResets: BankedResets?
+    /// The source reads reset inventory, so a missing inventory means the read failed.
+    var tracksBankedResets = false
     var id: DisplayProvider { provider }
 
     var showsBankedResets: Bool { bankedResets.map { $0.availableCount > 0 } ?? false }
-    var resetInventoryUnavailable: Bool { provider == .codex && !rows.isEmpty && bankedResets == nil }
+    var resetInventoryUnavailable: Bool { tracksBankedResets && !rows.isEmpty && bankedResets == nil }
 }
 
 /// What the panel shows. `AppDelegate` fills it from the normalized usage
@@ -166,7 +168,6 @@ struct UsagePanelCardView: View {
     let card: UsagePanelCard
     @ObservedObject var model: UsagePanelModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showsResetDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -180,36 +181,27 @@ struct UsagePanelCardView: View {
                 }
                 Spacer(minLength: 4)
                 if card.showsBankedResets, let resets = card.bankedResets {
-                    Button {
-                        showsResetDetails.toggle()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text("\(resets.availableCount) banked \(resets.availableCount == 1 ? "reset" : "resets")")
-                            Image(systemName: "chevron.down").font(.system(size: 9))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .help("View banked reset expiration dates")
-                    .accessibilityIdentifier("banked-reset-details")
-                    .popover(isPresented: $showsResetDetails, arrowEdge: .bottom) {
-                        BankedResetDetailsView(resets: resets)
-                    }
+                    BankedResetCountButton(resets: resets)
                 } else if card.resetInventoryUnavailable {
-                    Text("Resets unavailable")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    BankedResetUnavailableText()
                 }
             }
             .frame(height: 18)
 
             ForEach(card.accounts) { account in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("\(account.identity) · \(account.id)")
-                        .font(.system(size: 12, weight: .medium))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(account.identity) · \(account.id)")
+                            .font(.system(size: 12, weight: .medium))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        if let resets = account.reading?.bankedResets, resets.availableCount > 0 {
+                            BankedResetCountButton(resets: resets)
+                        } else if account.resetInventoryUnavailable {
+                            BankedResetUnavailableText()
+                        }
+                    }
                     if let plan = account.reading?.plan, !plan.isEmpty { Text(plan).font(.system(size: 12)).foregroundStyle(.secondary) }
                     ForEach(account.reading?.windows ?? []) { window in
                         HStack(spacing: 7) {
@@ -275,7 +267,6 @@ struct UsagePanelCardView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(stroke, lineWidth: 1)
         )
-        .onChange(of: card.bankedResets) { _, _ in showsResetDetails = false }
     }
 
     @ViewBuilder private var mark: some View {
@@ -331,23 +322,51 @@ struct UsagePanelCardView: View {
     }
 }
 
+/// Positive count in a card or account title row; opens every reset with its expiry.
+struct BankedResetCountButton: View {
+    let resets: BankedResets
+    @State private var showsDetails = false
+
+    var body: some View {
+        Button {
+            showsDetails.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Text("\(resets.availableCount) banked \(resets.availableCount == 1 ? "reset" : "resets")")
+                Image(systemName: "chevron.down").font(.system(size: 9))
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .fixedSize()
+        .help("View banked reset expiration dates")
+        .accessibilityIdentifier("banked-reset-details")
+        .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
+            BankedResetDetailsView(resets: resets)
+        }
+        .onChange(of: resets) { _, _ in showsDetails = false }
+    }
+}
+
+struct BankedResetUnavailableText: View {
+    var body: some View {
+        Text("Resets unavailable")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize()
+    }
+}
+
 struct BankedResetSummaryView: View {
-    let resets: CodexBankedResets
+    let resets: BankedResets
 
     var body: some View {
         HStack(spacing: 7) {
-            Text(resets.expirations == nil ? "Expires" : "Next expiry")
+            Text(resets.entries == nil ? "Expires" : "Next expiry")
             Spacer(minLength: 0)
-            if let first = resets.expirationGroups.first {
-                switch first.expiration {
-                case .at(let date):
-                    Text(date, format: .dateTime.month(.abbreviated).day().hour().minute())
-                        .help(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))
-                case .doesNotExpire:
-                    Text("Does not expire")
-                case .unknown:
-                    Text("Unavailable")
-                }
+            if let first = resets.entries?.first {
+                BankedResetExpirationText(expiration: first.expiration, short: true)
                 if resets.availableCount > first.count {
                     Text("· +\(resets.availableCount - first.count)")
                 }
@@ -363,37 +382,54 @@ struct BankedResetSummaryView: View {
 }
 
 struct BankedResetDetailsView: View {
-    let resets: CodexBankedResets
+    let resets: BankedResets
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Banked resets").fontWeight(.semibold)
-            if resets.expirations == nil {
-                Text("Expiration dates are unavailable. Refresh to try again.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(resets.expirationGroups) { group in
+            if let entries = resets.entries {
+                ForEach(entries) { entry in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("\(group.count) \(group.count == 1 ? "reset" : "resets")")
-                        Spacer(minLength: 0)
-                        switch group.expiration {
-                        case .at(let date):
-                            Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute().timeZone())
-                                .multilineTextAlignment(.trailing)
-                        case .doesNotExpire:
-                            Text("Does not expire")
-                        case .unknown:
-                            Text("Expiration unavailable")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title).fixedSize(horizontal: false, vertical: true)
+                            if let detail = entry.detail { Text(detail) }
                         }
+                        Spacer(minLength: 0)
+                        BankedResetExpirationText(expiration: entry.expiration, short: false)
+                            .multilineTextAlignment(.trailing)
                     }
                     .foregroundStyle(.secondary)
                 }
+            } else {
+                Text("Expiration dates are unavailable. Refresh to try again.")
+                    .foregroundStyle(.secondary)
             }
         }
         .font(.system(size: 12))
         .monospacedDigit()
         .padding(12)
         .frame(width: 310, alignment: .leading)
+    }
+}
+
+private struct BankedResetExpirationText: View {
+    let expiration: BankedResets.Expiration
+    let short: Bool
+
+    var body: some View {
+        switch expiration {
+        case .at(let date):
+            if short {
+                Text(date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                    .help(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))
+            } else {
+                Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute().timeZone())
+            }
+        case .doesNotExpire:
+            Text("Does not expire")
+        case .unknown:
+            Text(short ? "Unavailable" : "Expiration unavailable")
+        }
     }
 }
 

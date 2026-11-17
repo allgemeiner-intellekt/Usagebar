@@ -38,7 +38,7 @@ nonisolated struct CPAWindow: Identifiable {
 nonisolated struct CPAReading {
     var plan = ""
     var windows: [CPAWindow]
-    var bankedResets: CodexBankedResets?
+    var bankedResets: BankedResets?
 }
 
 nonisolated struct CPAAccount: Identifiable {
@@ -52,6 +52,11 @@ nonisolated struct CPAAccount: Identifiable {
     var reading: CPAReading?
     var error: String?
     var refresh = ProviderRefreshState()
+
+    /// Usage was read but the reset inventory this provider supports was not.
+    var resetInventoryUnavailable: Bool {
+        (provider == .codex || provider == .claude) && reading != nil && reading?.bankedResets == nil
+    }
 }
 
 nonisolated enum CPAError: LocalizedError {

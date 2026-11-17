@@ -27,11 +27,13 @@ struct UsagePanelCard: Identifiable {
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
     var accounts: [CPAAccount] = []
-    var bankedResets: CodexBankedResets?
+    var bankedResets: BankedResets?
+    /// The source reads reset inventory, so a missing inventory means the read failed.
+    var tracksBankedResets = false
     var id: DisplayProvider { provider }
 
     var showsBankedResets: Bool { bankedResets.map { $0.availableCount > 0 } ?? false }
-    var resetInventoryUnavailable: Bool { provider == .codex && !rows.isEmpty && bankedResets == nil }
+    var resetInventoryUnavailable: Bool { tracksBankedResets && !rows.isEmpty && bankedResets == nil }
 }
 
 /// What the panel shows. `AppDelegate` fills it from the normalized usage
@@ -332,22 +334,14 @@ struct UsagePanelCardView: View {
 }
 
 struct BankedResetSummaryView: View {
-    let resets: CodexBankedResets
+    let resets: BankedResets
 
     var body: some View {
         HStack(spacing: 7) {
-            Text(resets.expirations == nil ? "Expires" : "Next expiry")
+            Text(resets.entries == nil ? "Expires" : "Next expiry")
             Spacer(minLength: 0)
-            if let first = resets.expirationGroups.first {
-                switch first.expiration {
-                case .at(let date):
-                    Text(date, format: .dateTime.month(.abbreviated).day().hour().minute())
-                        .help(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))
-                case .doesNotExpire:
-                    Text("Does not expire")
-                case .unknown:
-                    Text("Unavailable")
-                }
+            if let first = resets.entries?.first {
+                BankedResetExpirationText(expiration: first.expiration, short: true)
                 if resets.availableCount > first.count {
                     Text("· +\(resets.availableCount - first.count)")
                 }
@@ -363,37 +357,54 @@ struct BankedResetSummaryView: View {
 }
 
 struct BankedResetDetailsView: View {
-    let resets: CodexBankedResets
+    let resets: BankedResets
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Banked resets").fontWeight(.semibold)
-            if resets.expirations == nil {
-                Text("Expiration dates are unavailable. Refresh to try again.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(resets.expirationGroups) { group in
+            if let entries = resets.entries {
+                ForEach(entries) { entry in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("\(group.count) \(group.count == 1 ? "reset" : "resets")")
-                        Spacer(minLength: 0)
-                        switch group.expiration {
-                        case .at(let date):
-                            Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute().timeZone())
-                                .multilineTextAlignment(.trailing)
-                        case .doesNotExpire:
-                            Text("Does not expire")
-                        case .unknown:
-                            Text("Expiration unavailable")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title).fixedSize(horizontal: false, vertical: true)
+                            if let detail = entry.detail { Text(detail) }
                         }
+                        Spacer(minLength: 0)
+                        BankedResetExpirationText(expiration: entry.expiration, short: false)
+                            .multilineTextAlignment(.trailing)
                     }
                     .foregroundStyle(.secondary)
                 }
+            } else {
+                Text("Expiration dates are unavailable. Refresh to try again.")
+                    .foregroundStyle(.secondary)
             }
         }
         .font(.system(size: 12))
         .monospacedDigit()
         .padding(12)
         .frame(width: 310, alignment: .leading)
+    }
+}
+
+private struct BankedResetExpirationText: View {
+    let expiration: BankedResets.Expiration
+    let short: Bool
+
+    var body: some View {
+        switch expiration {
+        case .at(let date):
+            if short {
+                Text(date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                    .help(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))
+            } else {
+                Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute().timeZone())
+            }
+        case .doesNotExpire:
+            Text("Does not expire")
+        case .unknown:
+            Text(short ? "Unavailable" : "Expiration unavailable")
+        }
     }
 }
 

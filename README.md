@@ -44,6 +44,7 @@ Usage limits matter most while you are working. Usagebar puts your Claude Code, 
 | Fixed menu-bar icon | A compact monochrome chart symbol opens the panel with either a left or right click. |
 | Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Provider visibility switches are under the panel's **⋯** button. |
 | Codex banked resets | A compact count and nearest expiry. Click the count for all quantities and expiration dates in your Mac's time zone. Zero resets are hidden; failed requests show unavailable. Display only, with no redemption action. |
+| Claude banked resets (CPA source) | The same compact count, nearest expiry, and details for Claude reset grants read through CLIProxyAPI, including each grant's type and resets left. Display only. |
 | Local credential discovery | Reuse the Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok sign-ins already on the Mac. No API keys to paste. |
 | Privacy-first operation | No Usagebar account, telemetry, analytics, or intermediary backend. |
 | Lightweight runtime | A native Swift menu-bar app with no web runtime or bundled service. Background refresh slows while the panel is closed. |

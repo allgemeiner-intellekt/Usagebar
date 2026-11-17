@@ -38,7 +38,7 @@ nonisolated struct CPAWindow: Identifiable {
 nonisolated struct CPAReading {
     var plan = ""
     var windows: [CPAWindow]
-    var bankedResets: CodexBankedResets?
+    var bankedResets: BankedResets?
 }
 
 nonisolated struct CPAAccount: Identifiable {

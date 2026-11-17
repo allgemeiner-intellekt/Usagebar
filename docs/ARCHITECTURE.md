@@ -81,6 +81,7 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | Purpose | Default destination |
 | --- | --- |
 | Claude OAuth usage | `https://api.anthropic.com/api/oauth/usage` |
+| Claude banked reset grants (CPA only, GET only) | `https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1` |
 | Claude OAuth refresh | `https://platform.claude.com/v1/oauth/token` |
 | Claude browser-session usage | `https://claude.ai/api/organizations/{orgId}/usage` |
 | Codex usage | `https://chatgpt.com/backend-api/wham/usage` |
@@ -101,6 +102,8 @@ Codex refreshes banked reset inventory with the same credentials and refresh cad
 
 The Codex card uses a compact summary: a positive banked reset count in the title row and the nearest expiration below its usage meter. Clicking the count opens all expiration groups, sorted by date, with quantities, years, local times, and time zones. Explicitly non-expiring resets and missing dates have separate labels. A confirmed zero count hides both count and summary; unavailable inventory remains distinct from zero. Card spacing is reduced without reducing text size, so a weekly Codex meter plus reset summary uses the same height as two ordinary usage meters. The fixed menu-bar icon and other provider information are unchanged.
 
+Claude banked resets are read only through the CPA source. The read uses the `cedar_ember` block of the OAuth usage endpoint, an undocumented contract taken from the CPA management panel, and sends the same Claude Code client identity as that panel. Validation follows the panel: a malformed or duplicate grant, or a bad timestamp, rejects the whole block, which then shows as unavailable. The count is the sum of resets left on unexpired grants. An ineligible account or an empty grant list counts as zero. A missing end date is shown as unknown, not as permanent. The Claude card uses the Codex layout; its popover lists each grant's type (5-hour, weekly, full, or Fable refill), server label, resets left of total, and expiry. Direct Claude sign-in does not read grants and never shows them as unavailable. Usagebar never redeems a grant.
+
 ## Local persistence
 
 | Data | Storage |
@@ -120,4 +123,4 @@ Provider changes must keep discovery inside services, raw payload parsing provid
 
 ## Optional CPA source
 
-[CLIProxyAPI setup and boundaries](CPA.md) describes the exclusive global source selection. `CPAClient` lists remote accounts and sends account-pinned quota reads. `UsageViewModel` owns account reconciliation, independent freshness/backoff, and source-switch cancellation. CPA credentials use the existing encrypted store. Direct credential discovery never runs during CPA refreshes. Codex reset inventory has its own account-scoped server cooldown and retains counts supplied by usage when expiration details are unavailable.
+[CLIProxyAPI setup and boundaries](CPA.md) describes the exclusive global source selection. `CPAClient` lists remote accounts and sends account-pinned quota reads. `UsageViewModel` owns account reconciliation, independent freshness/backoff, and source-switch cancellation. CPA credentials use the existing encrypted store. Direct credential discovery never runs during CPA refreshes. Codex reset inventory and Claude reset grants have their own account-scoped server cooldown. Codex retains counts supplied by usage when expiration details are unavailable.

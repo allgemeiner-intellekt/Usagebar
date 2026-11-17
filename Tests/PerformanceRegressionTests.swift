@@ -10,6 +10,7 @@ struct PerformanceRegressionTests {
         UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests")
         defer { UserDefaults.standard.removePersistentDomain(forName: "dev.usagebar.performance-tests") }
         try await testCPA()
+        try await testClaudeBankedResets()
         testRefreshPolicy()
         testRetryAfter()
         testTimerLifetime()

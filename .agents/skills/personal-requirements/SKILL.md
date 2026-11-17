@@ -18,6 +18,7 @@ This fork is for the owner's personal use. Upstream contributions and public dis
 - Refresh all enabled providers less often while the panel and settings menu are closed. Opening checks freshness immediately and refreshes stale data; fresh data need not refetch. Preserve Low Power Mode, retry backoff, and server cooldowns.
 - The microphone overlap observation was resolved as normal menu-bar management behavior and requires no fix or alternate opening route.
 - Future personal renaming and app-icon changes are separate work. Preserve MIT copyright and license notices.
+- Claude banked resets are shown only for CPA accounts, display only with no redeem action or link. The count matches the CPA panel (resets left on unexpired grants); zero, ineligible, or no grants hide it, and a failed or malformed read shows unavailable. The popover shows each grant's type, label, left/total, and expiry. Direct Claude sign-in is out of scope for now.
 - The owner uses services on multiple devices. Existing usage-limit displays remain useful; token counting is a separate, deferred feature.
 
 The fixed-icon implementation replaces the original cycling design. Check the current code and validation evidence before claiming any requirement is delivered.

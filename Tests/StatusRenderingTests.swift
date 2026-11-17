@@ -99,7 +99,7 @@ extension AppDelegate {
 
         let expiry = ISO8601Timestamp.date(from: "2026-11-06T15:59:00Z")!
         let later = ISO8601Timestamp.date(from: "2026-11-30T15:59:00Z")!
-        let inventory = CodexBankedResets(availableCount: 3, expirations: [.at(later), .at(expiry), .at(expiry)])
+        let inventory = BankedResets(availableCount: 3, expirations: [.at(later), .at(expiry), .at(expiry)])
         viewModel.codexUsageData = CodexUsageData(
             planType: "pro", primaryUsedPercent: 34, primaryWindowSeconds: 604800,
             bankedResets: inventory
@@ -115,13 +115,24 @@ extension AppDelegate {
         precondition(abs(cardHeight(codexCard) - cardHeight(claudeCard)) < 4,
                      "Banked reset summary should occupy the same height as a second usage row")
         var emptyCard = codexCard
-        emptyCard.bankedResets = CodexBankedResets(availableCount: 0, expirations: [])
+        emptyCard.bankedResets = BankedResets(availableCount: 0, expirations: [])
         precondition(!emptyCard.showsBankedResets && !emptyCard.resetInventoryUnavailable)
         precondition(cardHeight(emptyCard) < cardHeight(codexCard) - 10, "Zero resets must leave no blank summary row")
         var unavailableCard = codexCard
         unavailableCard.bankedResets = nil
         precondition(!unavailableCard.showsBankedResets && unavailableCard.resetInventoryUnavailable,
                      "Failed inventory must remain distinct from zero resets")
+        precondition(!claudeCard.tracksBankedResets && !claudeCard.resetInventoryUnavailable,
+                     "Direct Claude does not read reset grants and must not show them as unavailable")
+        let claudeGrants = BankedResets(availableCount: 2, grants: [
+            BankedResets.Grant(id: "nov", kind: .full, label: "", left: 1, total: 1, expiration: .at(expiry)),
+            BankedResets.Grant(id: "refill", kind: .fable, label: "", left: 1, total: 1, expiration: .unknown)
+        ])
+        let cpaClaudeCard = UsagePanelCard(provider: .claude, detail: "", rows: Array(claudeCard.rows.prefix(1)),
+                                           bankedResets: claudeGrants, tracksBankedResets: true)
+        precondition(cpaClaudeCard.showsBankedResets && claudeGrants.entries?.map(\.title) == ["Full reset", "Fable reset"])
+        precondition(abs(cardHeight(cpaClaudeCard) - cardHeight(codexCard)) < 4,
+                     "Claude reset summary should match the Codex card height")
 
         guard let output else { return }
         let sheet = NSImage(size: NSSize(width: 720, height: 460))
@@ -171,10 +182,13 @@ extension AppDelegate {
             try png.write(to: output)
         }
         // Render the real detail view in both appearances, using fixture dates only.
-        let detailSheet = NSImage(size: NSSize(width: 660, height: 160))
+        let detailSheet = NSImage(size: NSSize(width: 660, height: 320))
         for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
             let dark = column == 1
-            let host = NSHostingView(rootView: BankedResetDetailsView(resets: inventory)
+            let host = NSHostingView(rootView: VStack(alignment: .leading, spacing: 0) {
+                BankedResetDetailsView(resets: inventory)
+                BankedResetDetailsView(resets: claudeGrants)
+            }
                 .environment(\.colorScheme, dark ? .dark : .light))
             host.appearance = NSAppearance(named: appearance)!
             host.setFrameSize(host.fittingSize)
@@ -185,8 +199,8 @@ extension AppDelegate {
             preview.addRepresentation(bitmap)
             detailSheet.lockFocus()
             (dark ? NSColor(white: 0.16, alpha: 1) : .white).setFill()
-            NSRect(x: CGFloat(column) * 330, y: 0, width: 330, height: 160).fill()
-            preview.draw(at: NSPoint(x: CGFloat(column) * 330 + 10, y: 150 - preview.size.height),
+            NSRect(x: CGFloat(column) * 330, y: 0, width: 330, height: 320).fill()
+            preview.draw(at: NSPoint(x: CGFloat(column) * 330 + 10, y: 310 - preview.size.height),
                          from: .zero, operation: .sourceOver, fraction: 1)
             detailSheet.unlockFocus()
         }

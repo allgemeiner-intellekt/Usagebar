@@ -99,11 +99,24 @@ final class CPAClient {
             throw CPAError.message("Quota queries are unsupported for this CPA account authentication.")
         }
         var reading = try Self.parse(await outbound(url: url, account: account, headers: headers), provider: account.provider)
-        let inventoryKey = account.id + ":" + (account.chatGPTAccountID ?? "")
-        if account.provider == .codex, inventoryRetryAt[inventoryKey, default: .distantPast] <= Date() {
+        let inventoryKey = account.provider.rawValue + ":" + account.id + ":" + (account.chatGPTAccountID ?? "")
+        let inventory: (url: String, headers: [String: String], parse: (Data) throws -> BankedResets)?
+        switch account.provider {
+        case .codex:
+            inventory = ("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", headers, BankedResets.parse)
+        case .claude:
+            // Same read-only request as the CPA management panel. The grant program
+            // can depend on the client, so identify as Claude Code like that panel does.
+            var claudeHeaders = headers
+            claudeHeaders["User-Agent"] = "claude-cli/2.1.280 (external, cli)"
+            inventory = ("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1", claudeHeaders, { try BankedResets.parseClaude($0) })
+        default:
+            inventory = nil
+        }
+        if let inventory, inventoryRetryAt[inventoryKey, default: .distantPast] <= Date() {
             do {
-                let data = try await outbound(url: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", account: account, headers: headers)
-                reading.bankedResets = try CodexBankedResets.parse(data)
+                let data = try await outbound(url: inventory.url, account: account, headers: inventory.headers)
+                reading.bankedResets = try inventory.parse(data)
                 inventoryRetryAt[inventoryKey] = nil
             } catch {
                 try Task.checkCancellation()
@@ -238,7 +251,7 @@ final class CPAClient {
         if provider == .codex,
            let resets = root["rate_limit_reset_credits"] as? [String: Any],
            let count = resets["available_count"] as? Int, count >= 0 {
-            reading.bankedResets = CodexBankedResets(availableCount: count)
+            reading.bankedResets = BankedResets(availableCount: count)
         }
         return reading
     }

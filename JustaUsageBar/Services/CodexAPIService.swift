@@ -19,7 +19,7 @@ nonisolated struct CodexUsageData {
     var hasCredits: Bool = false
     var creditBalance: Double?
     var isUnlimited: Bool = false
-    var bankedResets: CodexBankedResets?
+    var bankedResets: BankedResets?
 
     /// True once Codex's primary window is the weekly one (the old 5h window
     /// was retired upstream); the separate secondary weekly is redundant then.
@@ -250,7 +250,7 @@ final class CodexAPIService {
             }
             guard http.statusCode == 200 else { return usage }
             var usage = usage
-            usage.bankedResets = try CodexBankedResets.parse(data)
+            usage.bankedResets = try BankedResets.parse(data)
             resetInventoryRetryAt = nil
             return usage
         } catch {
@@ -311,7 +311,7 @@ final class CodexAPIService {
         usage.planType = json["plan_type"] as? String ?? "unknown"
         if let resets = json["rate_limit_reset_credits"] as? [String: Any],
            let count = resets["available_count"] as? Int, count >= 0 {
-            usage.bankedResets = CodexBankedResets(availableCount: count)
+            usage.bankedResets = BankedResets(availableCount: count)
         }
 
         if let rateLimit = json["rate_limit"] as? [String: Any] {

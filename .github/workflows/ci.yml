@@ -8,26 +8,83 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  tooling:
+    name: Check update tooling and build scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app_required: ${{ steps.scope.outputs.app_required }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check personal update tooling
+        run: |
+          python3 -m unittest discover -s script/tests -p 'test_*.py'
+          bash -n script/package_artifact.sh
+          git diff --check
+      - name: Select validation scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [[ "$BASE" =~ ^0+$ ]]; then
+            echo 'app_required=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "app_required=$(python3 script/ci_scope.py "$BASE" "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
-    name: Build macOS app
-    # Use the standard Intel pool to avoid macOS arm64 runner capacity failures.
-    # xcodebuild still produces the universal arm64/x86_64 app below.
+    name: Compile and test macOS app
+    needs: tooling
+    if: needs.tooling.outputs.app_required == 'true'
+    # Use the standard Intel pool; xcodebuild produces both architectures.
     runs-on: macos-15-intel
     timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Reuse validated source on main
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python3 script/update_personal.py --commit "$GITHUB_SHA" --download-only --no-wait --output build/Artifact
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo 'found=true' >> "$GITHUB_OUTPUT"
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          source = json.loads(Path('build/Artifact/selection.json').read_text())
+          print('## Reused validated personal build')
+          print(f"Source tree: `{source['tree']}`")
+          print(f"[Download original artifacts]({source['run']}#artifacts)")
+          PY
+          elif [ "$status" -eq 2 ]; then
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
       - name: Select Xcode
+        if: steps.reuse.outputs.found != 'true'
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app
           xcodebuild -version
       - name: Build
+        if: steps.reuse.outputs.found != 'true'
         run: |
           xcodebuild \
             -project JustaUsageBar.xcodeproj \
@@ -38,6 +95,7 @@ jobs:
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=- \
             build
       - name: Verify install and update safeguards
+        if: steps.reuse.outputs.found != 'true'
         run: |
           app="build/DerivedData/Build/Products/Release/Usagebar.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$app/Contents/Info.plist")" = "true"
@@ -46,15 +104,38 @@ jobs:
           ruby -c Casks/usagebar.rb
           ruby -rjson -e 'abort unless JSON.parse(File.read("cask_renames.json")) == {"justausagebar" => "usagebar"}'
       - name: Run performance and rendering regression tests
+        if: steps.reuse.outputs.found != 'true'
         env:
           USAGEBAR_RENDER_OUTPUT: ${{ github.workspace }}/build/Artifact/status-preview.png
         run: ./script/test_performance.sh
       - name: Package personal build
+        if: steps.reuse.outputs.found != 'true'
         run: bash script/package_artifact.sh
       - name: Upload personal build
+        if: steps.reuse.outputs.found != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Usagebar-macos-universal-${{ github.sha }}
           path: build/Artifact/
           if-no-files-found: error
           retention-days: 30
+
+  result:
+    # Keep the existing required check stable, including for infrastructure-only PRs.
+    name: Build macOS app
+    needs: [tooling, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify required checks
+        env:
+          TOOLING: ${{ needs.tooling.result }}
+          APP: ${{ needs.build.result }}
+        run: |
+          test "$TOOLING" = success
+          if [ "$APP" = skipped ]; then
+            echo 'Infrastructure checks passed; no app build required.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            test "$APP" = success
+          fi

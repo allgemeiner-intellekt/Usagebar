@@ -51,6 +51,7 @@ final class UsagePanelModel: ObservableObject {
     var cursorMarks: NSImage?
     var zcodeMark: NSImage?
 
+    var onResize: () -> Void = {}
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
     var onMore: (NSView) -> Void = { _ in }
@@ -77,6 +78,11 @@ private struct CappedHeightLayout: Layout {
     }
 }
 
+private struct PanelHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct UsagePanelView: View {
     @ObservedObject var model: UsagePanelModel
 
@@ -91,6 +97,12 @@ struct UsagePanelView: View {
         .padding(8)
         .frame(width: 340)
         .font(.system(size: 13))
+        // SwiftUI applies model changes on a later run-loop pass, so the window
+        // refits when the laid-out height changes rather than when the model does.
+        .background(GeometryReader { geometry in
+            Color.clear.preference(key: PanelHeight.self, value: geometry.size.height)
+        })
+        .onPreferenceChange(PanelHeight.self) { _ in model.onResize() }
     }
 
     private var content: some View {
@@ -528,16 +540,6 @@ extension NSColor {
     static let usagebarClaudeOrange = NSColor(red: 0.851, green: 0.467, blue: 0.341, alpha: 1)
 }
 
-/// Reports SwiftUI content size changes, which arrive after model updates.
-private final class SizeReportingHostingView<Content: View>: NSHostingView<Content> {
-    var onSizeChange: () -> Void = {}
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        onSizeChange()
-    }
-}
-
 /// A borderless panel under the status item that closes on an outside click
 /// or Escape. It doesn't activate the app, like a menu.
 final class UsagePanel: NSPanel {
@@ -568,12 +570,7 @@ final class UsagePanel: NSPanel {
         effect.blendingMode = .behindWindow
         // The content is a sibling above the blur, not inside it, so text
         // keeps its solid colors instead of turning vibrant (lighter).
-        let hosting = SizeReportingHostingView(rootView: rootView)
-        // SwiftUI applies model changes on a later run-loop pass, so refit
-        // whenever the hosted content's size actually changes.
-        hosting.onSizeChange = { [weak self] in
-            DispatchQueue.main.async { self?.fitContent() }
-        }
+        let hosting = NSHostingView(rootView: rootView)
         for view in [effect, hosting] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)

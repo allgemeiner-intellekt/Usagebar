@@ -231,7 +231,9 @@ struct StatusRenderingTests {
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
         let delegate = AppDelegate(viewModel: model)
+        FileHandle.standardError.write(Data("stage: rendering\n".utf8))
         try delegate.verifyRendering(output: output)
+        FileHandle.standardError.write(Data("stage: CPA rendering\n".utf8))
         delegate.verifyCPARendering()
         print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, provider switches, closed-menu reuse, visibility cadence")
     }
@@ -278,6 +280,7 @@ extension AppDelegate {
         updatePanel()
         liveHost.layoutSubtreeIfNeeded()
         let freshHost = NSHostingView(rootView: UsagePanelView(model: panelModel))
+        FileHandle.standardError.write(Data("panel heights: tall \(tallHeight), shrunk \(liveHost.fittingSize.height), fresh \(freshHost.fittingSize.height)\n".utf8))
         precondition(liveHost.fittingSize.height < tallHeight - 100, "Panel kept its taller height after content shrank")
         precondition(abs(liveHost.fittingSize.height - freshHost.fittingSize.height) < 1,
                      "Panel height depends on earlier content")

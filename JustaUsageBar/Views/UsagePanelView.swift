@@ -528,6 +528,16 @@ extension NSColor {
     static let usagebarClaudeOrange = NSColor(red: 0.851, green: 0.467, blue: 0.341, alpha: 1)
 }
 
+/// Reports SwiftUI content size changes, which arrive after model updates.
+private final class SizeReportingHostingView<Content: View>: NSHostingView<Content> {
+    var onSizeChange: () -> Void = {}
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onSizeChange()
+    }
+}
+
 /// A borderless panel under the status item that closes on an outside click
 /// or Escape. It doesn't activate the app, like a menu.
 final class UsagePanel: NSPanel {
@@ -558,7 +568,12 @@ final class UsagePanel: NSPanel {
         effect.blendingMode = .behindWindow
         // The content is a sibling above the blur, not inside it, so text
         // keeps its solid colors instead of turning vibrant (lighter).
-        let hosting = NSHostingView(rootView: rootView)
+        let hosting = SizeReportingHostingView(rootView: rootView)
+        // SwiftUI applies model changes on a later run-loop pass, so refit
+        // whenever the hosted content's size actually changes.
+        hosting.onSizeChange = { [weak self] in
+            DispatchQueue.main.async { self?.fitContent() }
+        }
         for view in [effect, hosting] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)

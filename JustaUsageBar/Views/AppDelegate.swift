@@ -389,7 +389,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             zMark.transform(using: transform)
             panelModel.zcodeMark = templateImage(size: NSSize(width: 1.13 * 10.6, height: 10.6), paths: [zMark])
         }
-        DispatchQueue.main.async { [weak self] in self?.panel.fitContent() }
     }
 
     private func updatedText(_ date: Date?) -> String {

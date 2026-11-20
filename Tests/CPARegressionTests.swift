@@ -471,7 +471,23 @@ extension PerformanceRegressionTests {
         let codeAssistCalls2 = box.calls.filter { ($0["url"] as? String)?.contains("loadCodeAssist") == true }.count
         check(codeAssistCalls1 == 1 && codeAssistCalls2 == 1, "loadCodeAssist ignored 429 cooldown")
 
-        // 5) Empty/malformed groups across all endpoints errors instead of showing zero.
+        // 5) Per-host 429 cooldown is preserved across successful fallbacks and skipped on subsequent calls.
+        box.calls.removeAll()
+        box.quotaResponses = [
+            (429, ["Retry-After": ["600"]], "{}"),
+            (200, [:], #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.6}]}]}"#),
+            (200, [:], #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5}]}]}"#)
+        ]
+        let afterThrottle1 = try await client.usage(for: agMeta)
+        check(afterThrottle1.poolGroups.first?.windows.first?.percent == 40, "Fallback after host 429 failed")
+        box.calls.removeAll()
+        let afterThrottle2 = try await client.usage(for: agMeta)
+        check(afterThrottle2.poolGroups.first?.windows.first?.percent == 50, "Subsequent fetch after host 429 failed")
+        let retriedURLs = box.calls.compactMap { $0["url"] as? String }.filter { $0.contains("retrieveUserQuotaSummary") }
+        check(retriedURLs == ["https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary"],
+              "Throttled quota host was not skipped during its cooldown")
+
+        // 6) Empty/malformed groups across all endpoints errors instead of showing zero.
         box.quotaResponses = [
             (200, [:], #"{"groups":[]}"#),
             (200, [:], #"{"groups":[{"displayName":"Bad","buckets":[{"bucketId":"x","remainingFraction":true}]}]}"#),

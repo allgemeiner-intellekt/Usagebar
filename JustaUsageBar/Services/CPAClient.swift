@@ -8,6 +8,7 @@ final class CPAClient {
     private var version: String?
     private var inventoryRetryAt: [String: Date] = [:]
     private var codeAssistRetryAt: [String: Date] = [:]
+    private var antigravityHostRetryAt: [String: Date] = [:]
     private var resolvedAntigravityProjectIDs: [String: String] = [:]
 
     private static let antigravityQuotaURLs = [
@@ -203,10 +204,18 @@ final class CPAClient {
         var hadSuccess = false
         var lastError: Error?
         var priorityError: CPAError?
+        var earliestHostCooldown: Date?
         var serverTimeOffset: TimeInterval?
 
         for url in Self.antigravityQuotaURLs {
             try Task.checkCancellation()
+            let hostKey = "antigravity:\(account.id):\(url)"
+            if let retryAt = antigravityHostRetryAt[hostKey], retryAt > Date() {
+                if earliestHostCooldown == nil || retryAt < earliestHostCooldown! {
+                    earliestHostCooldown = retryAt
+                }
+                continue
+            }
             do {
                 let response = try await outbound(
                     url: url,
@@ -215,6 +224,7 @@ final class CPAClient {
                     headers: headers,
                     bodyData: requestBody
                 )
+                antigravityHostRetryAt[hostKey] = nil
                 hadSuccess = true
                 let candidateOffset = serverTimeOffset ?? response.serverDate.map { $0.timeIntervalSinceNow }
                 let parsedGroups = Self.parseAntigravityQuotaGroups(response.data, serverTimeOffset: candidateOffset ?? 0)
@@ -242,9 +252,16 @@ final class CPAClient {
             } catch {
                 try Task.checkCancellation()
                 lastError = error
-                if case let cpaError as CPAError = error {
-                    if case .http(let status, _) = cpaError,
-                       (status == 401 || status == 403 || status == 404 || status == 429),
+                if case let cpaError as CPAError = error,
+                   case .http(let status, let retryAfter) = cpaError {
+                    if status == 429 || retryAfter != nil {
+                        let deadline = retryAfter ?? Date().addingTimeInterval(120)
+                        antigravityHostRetryAt[hostKey] = deadline
+                        if earliestHostCooldown == nil || deadline < earliestHostCooldown! {
+                            earliestHostCooldown = deadline
+                        }
+                    }
+                    if (status == 401 || status == 403 || status == 404 || status == 429),
                        priorityError == nil {
                         priorityError = cpaError
                     }
@@ -274,7 +291,10 @@ final class CPAClient {
         }
 
         guard !finalGroups.isEmpty else {
-            if !hadSuccess, let error = priorityError ?? lastError { throw error }
+            if !hadSuccess {
+                if let error = priorityError ?? lastError { throw error }
+                if let earliestHostCooldown { throw CPAError.http(429, earliestHostCooldown) }
+            }
             throw CPAError.message("Quota data is unsupported or incomplete for this account.")
         }
 

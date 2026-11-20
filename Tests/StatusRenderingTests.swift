@@ -282,6 +282,64 @@ extension AppDelegate {
         let freshHeight = NSHostingView(rootView: UsagePanelView(model: panelModel)).fittingSize.height
         precondition(panel.frame.height < tallHeight - 100, "Panel kept its taller height after content shrank")
         precondition(abs(panel.frame.height - freshHeight) < 1, "Panel height depends on earlier content")
+
+        // Antigravity CPA rendering, card ordering, pool submenu filtering, and all-pools-hidden state.
+        let agReading = CPAReading(plan: "Pro", windows: [], poolGroups: [
+            CPAPoolGroup(id: "gemini-models", label: "Gemini Models", description: "Models: Gemini Flash, Gemini Pro, Gemini Argon", windows: [
+                CPAWindow(id: "gemini-5h", label: "5h", percent: 15, reset: Date().addingTimeInterval(3600)),
+                CPAWindow(id: "gemini-weekly", label: "7d", percent: 40, reset: Date().addingTimeInterval(86400))
+            ]),
+            CPAPoolGroup(id: "claude-and-gpt-models", label: "Claude and GPT models", description: "Models: Claude Opus, GPT-OSS", windows: [
+                CPAWindow(id: "3p-5h", label: "5h", percent: 0, reset: Date().addingTimeInterval(3600),
+                          blockedByOuterLimit: true, detail: "Blocked because this pool's weekly limit is exhausted."),
+                CPAWindow(id: "3p-weekly", label: "7d", percent: 100, reset: Date().addingTimeInterval(86400))
+            ])
+        ])
+        let agAccount1 = CPAAccount(id: "ag-1", provider: .antigravity, identity: "ag1@example.invalid",
+                                    disabled: false, expired: false, projectID: "proj-1", reading: agReading)
+        let agAccount2 = CPAAccount(id: "ag-2", provider: .antigravity, identity: "ag2@example.invalid",
+                                    disabled: false, expired: false, projectID: "proj-2", reading: agReading)
+        let claudeAccount = CPAAccount(id: "cl-1", provider: .claude, identity: "cl@example.invalid",
+                                       disabled: false, expired: false, reading: reading)
+        viewModel.showClaude = true
+        viewModel.showCodex = true
+        viewModel.showAntigravity = true
+        viewModel.showAllAntigravityPools()
+        viewModel.useCPAAccountFixtures([claudeAccount, accounts[0], agAccount1])
+        let ordered = panelCards()
+        precondition(ordered.map(\.provider) == [.claude, .codex, .antigravity], "Antigravity card order mismatch")
+        let agCard = ordered[2]
+        precondition(agCard.detail == "Pro" && agCard.poolGroups.count == 2 && !agCard.allPoolsHidden, "Single Antigravity card lost pools or plan")
+        precondition(agCard.poolGroups[1].rows[0].dimmed, "Weekly-exhausted 5h row must be dimmed")
+
+        // Verify ⋯ Settings menu exposes Antigravity Pools submenu and toggles update panel cards.
+        menuWillOpen(menu)
+        let poolsSubmenu = menu.items.first { $0.title == "Antigravity Pools" }?.submenu
+        precondition(poolsSubmenu != nil, "Missing Antigravity Pools submenu in CPA mode")
+        let geminiItem = poolsSubmenu?.items.first { $0.title == "Gemini Models" }
+        let claudePoolItem = poolsSubmenu?.items.first { $0.title == "Claude and GPT models" }
+        precondition(geminiItem?.state == .on && claudePoolItem?.state == .on, "Pools should be checked by default")
+        menuDidClose(menu)
+
+        toggleAntigravityPool(geminiItem!)
+        let filteredCard = panelCards().first { $0.provider == .antigravity }!
+        precondition(filteredCard.poolGroups.map(\.id) == ["claude-and-gpt-models"] && !filteredCard.allPoolsHidden, "Hiding one pool failed")
+
+        toggleAntigravityPool(claudePoolItem!)
+        let hiddenAllCard = panelCards().first { $0.provider == .antigravity }!
+        precondition(hiddenAllCard.poolGroups.isEmpty && hiddenAllCard.allPoolsHidden, "All-pools-hidden state not reflected")
+
+        showAllAntigravityPools()
+        viewModel.useCPAAccountFixtures([agAccount1, agAccount2])
+        updatePanel()
+        let multiAG = panelCards().first { $0.provider == .antigravity }!
+        precondition(multiAG.accounts.count == 2 && multiAG.poolGroups.isEmpty, "Multi-account Antigravity must render per account")
+        for scheme: ColorScheme in [.light, .dark] {
+            let host = NSHostingView(rootView: UsagePanelView(model: panelModel).environment(\.colorScheme, scheme))
+            host.setFrameSize(host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            precondition(host.fittingSize.height <= panelModel.maximumContentHeight + 120, "Antigravity panel exceeded screen cap")
+        }
         panel.close()
     }
 }

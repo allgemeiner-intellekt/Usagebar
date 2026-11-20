@@ -200,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let (title, selector, shown): (String, Selector, Bool) = switch provider {
                 case .claude: ("Show Claude", #selector(toggleShowClaude), viewModel.showClaude)
                 case .codex: ("Show Codex", #selector(toggleShowCodex), viewModel.showCodex)
+                case .antigravity: ("Show Antigravity", #selector(toggleShowAntigravity), viewModel.showAntigravity)
                 case .cursor: ("Show Cursor", #selector(toggleShowCursor), viewModel.showCursor)
                 case .kimi: ("Show KimiCode", #selector(toggleShowKimi), viewModel.showKimi)
                 case .zai: ("Show Z.ai", #selector(toggleShowZai), viewModel.showZai)
@@ -209,6 +210,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 item.target = self
                 item.state = shown ? .on : .off
                 menu.addItem(item)
+                if provider == .antigravity, viewModel.hasAntigravityAccounts || !viewModel.hiddenAntigravityPoolIDs.isEmpty {
+                    let poolsMenu = NSMenu()
+                    let pools = viewModel.discoveredAntigravityPools
+                    if pools.isEmpty {
+                        let empty = NSMenuItem(title: "No pools loaded yet", action: nil, keyEquivalent: "")
+                        empty.isEnabled = false
+                        poolsMenu.addItem(empty)
+                    } else {
+                        for pool in pools {
+                            let poolItem = NSMenuItem(title: pool.label, action: #selector(toggleAntigravityPool(_:)), keyEquivalent: "")
+                            poolItem.target = self
+                            poolItem.representedObject = pool.id
+                            poolItem.state = viewModel.isAntigravityPoolVisible(pool.id) ? .on : .off
+                            poolsMenu.addItem(poolItem)
+                        }
+                    }
+                    poolsMenu.addItem(NSMenuItem.separator())
+                    let showAllItem = NSMenuItem(title: "Show All Pools", action: #selector(showAllAntigravityPools), keyEquivalent: "")
+                    showAllItem.target = self
+                    showAllItem.isEnabled = !viewModel.hiddenAntigravityPoolIDs.isEmpty
+                    poolsMenu.addItem(showAllItem)
+                    let poolsRoot = NSMenuItem(title: "Antigravity Pools", action: nil, keyEquivalent: "")
+                    poolsRoot.submenu = poolsMenu
+                    menu.addItem(poolsRoot)
+                }
             }
         } else if !hasClaude && !hasCodex && !hasCursor && !hasZai && !hasXai && !hasKimi {
             let setupItem = NSMenuItem(title: "Setup Usage Tracking", action: #selector(showCredentialsWindow), keyEquivalent: "")
@@ -229,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let title: String = switch provider {
                 case .claude: "Claude"
                 case .codex: "Codex"
+                case .antigravity: "Antigravity"
                 case .cursor: "Cursor"
                 case .kimi: "KimiCode"
                 case .zai: "z.ai"
@@ -403,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let shown: Bool = switch provider {
                 case .claude: viewModel.showClaude
                 case .codex: viewModel.showCodex
+                case .antigravity: viewModel.showAntigravity
                 case .cursor: viewModel.showCursor
                 case .kimi: viewModel.showKimi
                 case .zai: viewModel.showZai
@@ -410,13 +438,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
                 guard shown, !accounts.isEmpty else { return nil }
+                let hiddenPoolIDs = provider == .antigravity ? viewModel.hiddenAntigravityPoolIDs : []
                 if accounts.count == 1, let account = accounts.first {
+                    let allPools = account.reading?.poolGroups ?? []
+                    let visiblePools = allPools.filter { !hiddenPoolIDs.contains($0.id) }.map { group in
+                        UsagePanelPoolGroup(
+                            id: group.id,
+                            label: group.label,
+                            description: group.description,
+                            rows: group.windows.map {
+                                UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
+                                              dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
+                            }
+                        )
+                    }
                     return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
-                        UsagePanelRow(label: $0.label, percent: $0.percent, resetText: $0.resetText)
-                    }, message: cpaAccountMessage(account), bankedResets: account.reading?.bankedResets,
+                        UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
+                                      dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
+                    }, poolGroups: visiblePools, message: cpaAccountMessage(account),
+                    hiddenPoolIDs: hiddenPoolIDs, allPoolsHidden: !allPools.isEmpty && visiblePools.isEmpty,
+                    bankedResets: account.reading?.bankedResets,
                     tracksBankedResets: account.provider == .codex || account.provider == .claude)
                 }
-                return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts)
+                return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts, hiddenPoolIDs: hiddenPoolIDs)
             }
         }
         var cards: [UsagePanelCard] = []
@@ -532,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .claude: self?.authenticateClaude()
             case .codex: self?.authenticateCodex()
             case .kimi: self?.authenticateKimi()
-            case .cursor, .zai, .xai: break
+            case .antigravity, .cursor, .zai, .xai: break
             }
         }
         panelModel.onRefresh = { [weak self] in
@@ -693,6 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let anyShown =
             (viewModel.showClaude && viewModel.hasClaudeCredentials) ||
             (viewModel.showCodex && viewModel.hasCodexCredentials) ||
+            (viewModel.showAntigravity && viewModel.hasAntigravityCredentials) ||
             (viewModel.showCursor && viewModel.hasCursorCredentials) ||
             (viewModel.showKimi && viewModel.hasKimiCredentials) ||
             (viewModel.showZai && viewModel.hasZaiCredentials) ||
@@ -712,6 +757,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         viewModel.showCodex.toggle()
         ensureAProviderRemainsShown(fallback: \.showCodex)
         NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
+    }
+
+    @objc private func toggleShowAntigravity() {
+        viewModel.showAntigravity.toggle()
+        ensureAProviderRemainsShown(fallback: \.showAntigravity)
+        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
+    }
+
+    @objc private func toggleAntigravityPool(_ sender: NSMenuItem) {
+        guard let poolID = sender.representedObject as? String, !poolID.isEmpty else { return }
+        viewModel.toggleAntigravityPool(poolID)
+    }
+
+    @objc private func showAllAntigravityPools() {
+        viewModel.showAllAntigravityPools()
     }
 
     @objc private func toggleShowCursor() {

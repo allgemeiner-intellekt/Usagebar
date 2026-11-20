@@ -1,4 +1,4 @@
-> Personal fork of [betoxf/Usagebar](https://github.com/betoxf/Usagebar). Download personal builds from [GitHub Actions](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml). See [personal requirements](.agents/skills/personal-requirements/SKILL.md) for planned interaction changes, which are not implemented yet.
+> Personal fork of [betoxf/Usagebar](https://github.com/betoxf/Usagebar). Download personal builds from [GitHub Actions](https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml).
 
 <div align="center">
   <img src="assets/brand/usagebar-logo.png" alt="Usagebar" width="760">

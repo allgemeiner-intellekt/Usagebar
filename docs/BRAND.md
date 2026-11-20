@@ -22,3 +22,9 @@ The symbol represents a compact usage window with a local loading indicator. It 
 ## Personal menu-bar symbol
 
 The personal fork uses the built-in `chart.bar` system symbol as a monochrome template in a standard square status item. It is independent of the app icon and the original brand masters, which remain unchanged. Future personal renaming and app-icon work is separate from this menu-bar change.
+
+## Provider marks in the panel
+
+Each panel card shows its provider's mark as a template image, tinted with the provider's accent color, followed by the name. The same accent fills the card's usage meters. Marks live in `JustaUsageBar/Assets.xcassets` as `<Provider>Mark` or `ClaudeSpark`; titles and accents are defined in `DisplayProvider` in `UsagePanelView.swift`.
+
+Claude, Antigravity and KimiCode use their brand colors. Codex, Cursor, Z.ai and XAI have monochrome brands, so their accents are chosen to tell cards apart. Each accent has a light and a dark variant. The Antigravity and Kimi marks come from [lobe-icons](https://github.com/lobehub/lobe-icons) (MIT). The Codex mark is the symbol from the Codex lockup. The others are traced from the official marks.

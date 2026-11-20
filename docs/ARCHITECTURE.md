@@ -87,6 +87,8 @@ z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environmen
 | Codex usage | `https://chatgpt.com/backend-api/wham/usage` |
 | Codex banked reset inventory (GET only) | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
 | Codex OAuth refresh | `https://auth.openai.com/oauth/token` |
+| Antigravity quota summary (CPA only, POST) | `https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (fallback: `daily-cloudcode-pa.sandbox.googleapis.com`, `cloudcode-pa.googleapis.com`) |
+| Antigravity subscription tier / project fallback (CPA only, POST) | `https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` |
 | Cursor weekly allowance | `https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus` |
 | Kimi Code usage | `https://api.kimi.com/coding/v1/usages` |
 | Kimi Code OAuth refresh | `https://auth.kimi.com/api/oauth/token` |

@@ -19,11 +19,25 @@ nonisolated struct CPAConnection: Codable, Equatable {
     }
 }
 
-nonisolated struct CPAWindow: Identifiable {
+nonisolated struct CPAWindow: Identifiable, Equatable {
+    let id: String
     let label: String
     let percent: Int
     let reset: Date?
-    var id: String { label }
+    /// True when an outer limit in the same pool (such as weekly) is exhausted, blocking this window despite 0% used.
+    var blockedByOuterLimit: Bool = false
+    var detail: String? = nil
+
+    init(id: String? = nil, label: String, percent: Int, reset: Date?,
+         blockedByOuterLimit: Bool = false, detail: String? = nil) {
+        self.id = id ?? label
+        self.label = label
+        self.percent = percent
+        self.reset = reset
+        self.blockedByOuterLimit = blockedByOuterLimit
+        self.detail = detail
+    }
+
     var resetText: String {
         guard let reset else { return "--" }
         let interval = reset.timeIntervalSinceNow / 60
@@ -35,9 +49,22 @@ nonisolated struct CPAWindow: Identifiable {
     }
 }
 
+nonisolated struct CPAPoolGroup: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let description: String?
+    let windows: [CPAWindow]
+}
+
+nonisolated struct AntigravityPoolOption: Identifiable, Equatable {
+    let id: String
+    let label: String
+}
+
 nonisolated struct CPAReading {
     var plan = ""
     var windows: [CPAWindow]
+    var poolGroups: [CPAPoolGroup] = []
     var bankedResets: BankedResets?
 }
 
@@ -49,6 +76,7 @@ nonisolated struct CPAAccount: Identifiable {
     let expired: Bool
     var variant: String = ""
     var chatGPTAccountID: String?
+    var projectID: String?
     var reading: CPAReading?
     var error: String?
     var refresh = ProviderRefreshState()

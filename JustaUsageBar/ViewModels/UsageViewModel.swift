@@ -64,11 +64,17 @@ final class UsageViewModel: ObservableObject {
 
     @AppStorage("showClaude") var showClaude: Bool = true
     @AppStorage("showCodex") var showCodex: Bool = true
+    @AppStorage("showAntigravity") var showAntigravity: Bool = true
     @AppStorage("showCursor") var showCursor: Bool = true
     @AppStorage("showZai") var showZai: Bool = true
     @AppStorage("showXai") var showXai: Bool = true
     @AppStorage("showKimi") var showKimi: Bool = true
     @AppStorage("autoUpdate") var autoUpdate: Bool = true
+
+    nonisolated private static let hiddenAntigravityPoolsDefaultsKey = "hiddenAntigravityPoolIDs"
+    @Published private(set) var hiddenAntigravityPoolIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: "hiddenAntigravityPoolIDs") ?? []
+    )
 
     // Launch at login using SMAppService (macOS 13+)
     var launchAtStartup: Bool {
@@ -142,6 +148,7 @@ final class UsageViewModel: ObservableObject {
             switch $0 {
             case .claude: return showClaude
             case .codex: return showCodex
+            case .antigravity: return showAntigravity
             case .cursor: return showCursor
             case .kimi: return showKimi
             case .zai: return showZai
@@ -158,10 +165,53 @@ final class UsageViewModel: ObservableObject {
     var hasCredentials: Bool { !availableProviders.isEmpty }
     var hasClaudeCredentials: Bool { availableProviders.contains(.claude) }
     var hasCodexCredentials: Bool { availableProviders.contains(.codex) }
+    var hasAntigravityCredentials: Bool { availableProviders.contains(.antigravity) }
     var hasCursorCredentials: Bool { availableProviders.contains(.cursor) }
     var hasZaiCredentials: Bool { availableProviders.contains(.zai) }
     var hasXaiCredentials: Bool { availableProviders.contains(.xai) }
     var hasKimiCredentials: Bool { availableProviders.contains(.kimi) }
+
+    var hasAntigravityAccounts: Bool {
+        source == .cpa && cpaAccounts.contains { $0.provider == .antigravity }
+    }
+
+    /// Unique Antigravity pools discovered across loaded CPA accounts, in encounter order.
+    var discoveredAntigravityPools: [AntigravityPoolOption] {
+        var seen: Set<String> = []
+        var options: [AntigravityPoolOption] = []
+        for account in cpaAccounts where account.provider == .antigravity {
+            for group in account.reading?.poolGroups ?? [] {
+                if seen.insert(group.id).inserted {
+                    options.append(AntigravityPoolOption(id: group.id, label: group.label))
+                }
+            }
+        }
+        return options
+    }
+
+    func isAntigravityPoolVisible(_ poolID: String) -> Bool {
+        !hiddenAntigravityPoolIDs.contains(poolID)
+    }
+
+    func toggleAntigravityPool(_ poolID: String) {
+        if hiddenAntigravityPoolIDs.contains(poolID) {
+            hiddenAntigravityPoolIDs.remove(poolID)
+        } else {
+            hiddenAntigravityPoolIDs.insert(poolID)
+        }
+        persistHiddenAntigravityPools()
+    }
+
+    func showAllAntigravityPools() {
+        guard !hiddenAntigravityPoolIDs.isEmpty else { return }
+        hiddenAntigravityPoolIDs.removeAll()
+        persistHiddenAntigravityPools()
+    }
+
+    private func persistHiddenAntigravityPools() {
+        UserDefaults.standard.set(hiddenAntigravityPoolIDs.sorted(), forKey: Self.hiddenAntigravityPoolsDefaultsKey)
+        NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
+    }
 
     func usageVisibilityChanged(isVisible: Bool) {
         guard isVisible != isUsageVisible else { return }
@@ -314,6 +364,9 @@ final class UsageViewModel: ObservableObject {
                 let data = try await CodexAPIService.shared.fetchUsage()
                 try Task.checkCancellation()
                 codexUsageData = data
+            case .antigravity:
+                // Direct Antigravity support is out of scope; Antigravity is CPA-only for now.
+                return
             case .cursor:
                 let data = try await CursorAPIService.shared.fetchUsage()
                 try Task.checkCancellation()
@@ -358,6 +411,7 @@ final class UsageViewModel: ObservableObject {
         switch provider {
         case .claude: claudeError = message
         case .codex: codexError = message
+        case .antigravity: break
         case .cursor: cursorError = message
         case .zai: zaiError = message
         case .xai: xaiError = message
@@ -553,7 +607,7 @@ final class UsageViewModel: ObservableObject {
                 let previous = Dictionary(uniqueKeysWithValues: cpaAccounts.map { ($0.id, $0) })
                 cpaAccounts = discovered.map { account in
                     var account = account
-                    if let old = previous[account.id], old.provider == account.provider, old.identity == account.identity, old.variant == account.variant, old.chatGPTAccountID == account.chatGPTAccountID {
+                    if let old = previous[account.id], old.provider == account.provider, old.identity == account.identity, old.variant == account.variant, old.chatGPTAccountID == account.chatGPTAccountID, old.projectID == account.projectID {
                         account.reading = old.reading
                         account.refresh = old.refresh
                         account.error = old.error

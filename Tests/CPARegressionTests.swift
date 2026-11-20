@@ -223,6 +223,16 @@ nonisolated final class ClaudeGrantFixture: @unchecked Sendable {
     var inventory: (Int, String) = (200, "")
 }
 
+nonisolated final class AntigravityFixture: @unchecked Sendable {
+    var files: [[String: Any]] = []
+    var calls: [[String: Any]] = []
+    var paths: [String] = []
+    var quotaResponses: [(Int, [String: [String]], String)] = []
+    var codeAssistResponse: (Int, [String: [String]], String) = (
+        200, [:], #"{"paidTier":{"id":"g1-pro-tier","name":"Pro"}}"#
+    )
+}
+
 extension PerformanceRegressionTests {
     /// Fixture payloads follow the CPA management panel's `cedar_ember` contract.
     @MainActor static func testClaudeBankedResets() async throws {
@@ -324,6 +334,186 @@ extension PerformanceRegressionTests {
                                  reading: CPAReading(windows: []))
         check(!kimiRow.resetInventoryUnavailable, "Providers without resets must not report them unavailable")
         print("PASS: Claude reset grants, validation, CPA transport, usage fallback and cooldown")
+    }
+
+    @MainActor static func testAntigravityCPA() async throws {
+        let box = AntigravityFixture()
+        box.files = [
+            ["auth_index": "ag-1", "provider": "antigravity", "email": "ag1@example.invalid", "project_id": "proj-1"],
+            ["auth_index": "ag-meta", "type": "antigravity", "name": "ag2.json", "metadata": ["project_id": "proj-2"]],
+            ["auth_index": "ag-noproj", "provider": "antigravity", "email": "ag3@example.invalid"]
+        ]
+
+        let connection = try CPAConnection(address: "https://example.invalid", key: "fixture-key")
+        let client = await CPAClient(connection: connection, send: { request in
+            let path = request.url!.path
+            box.paths.append(path)
+            let response: [String: Any]
+            if let body = request.httpBody {
+                let call = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+                box.calls.append(call)
+                let url = call["url"] as? String ?? ""
+                precondition(call["method"] as? String == "POST", "Antigravity calls must use POST")
+                let headers = call["header"] as? [String: String] ?? [:]
+                precondition(headers["Authorization"] == "Bearer $TOKEN$", "Missing token placeholder")
+                precondition(headers["User-Agent"] == "antigravity/hub/2.23.0 darwin/arm64", "Unexpected Antigravity User-Agent")
+                if url.hasSuffix(":loadCodeAssist") {
+                    precondition(call["data"] as? String == #"{"metadata":{"ideType":"ANTIGRAVITY"}}"#, "Unexpected loadCodeAssist body")
+                    let item = box.codeAssistResponse
+                    response = ["status_code": item.0, "header": item.1, "body": item.2]
+                } else {
+                    let item = box.quotaResponses.isEmpty ? (200, [:], #"{"groups":[]}"#) : box.quotaResponses.removeFirst()
+                    response = ["status_code": item.0, "header": item.1, "body": item.2]
+                }
+            } else {
+                response = ["files": box.files]
+            }
+            return (try JSONSerialization.data(withJSONObject: response), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+
+        let accounts = try await client.accounts()
+        check(accounts.count == 3 && accounts.allSatisfy { $0.provider == .antigravity }, "Antigravity accounts not discovered")
+        let ag1 = accounts.first { $0.id == "ag-1" }!
+        let agMeta = accounts.first { $0.id == "ag-meta" }!
+        let agNoProj = accounts.first { $0.id == "ag-noproj" }!
+        check(ag1.projectID == "proj-1" && agMeta.projectID == "proj-2" && agNoProj.projectID == nil, "project_id extraction failed")
+
+        // 1) Partial daily response falls back to sandbox and prod, preserves earlier bucket values,
+        // merges missing buckets, sorts 5h before 7d, converts to Used %, and flags 5h blocked when weekly is exhausted.
+        let futureReset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        box.quotaResponses = [
+            (200, [:], """
+            {"groups":[{"displayName":"Claude and GPT models","description":"Models within this group: Claude Opus, GPT-OSS","buckets":[
+              {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.0,"resetTime":"\(futureReset)"}
+            ]}]}
+            """),
+            (403, [:], "{}"),
+            (200, [:], """
+            {"groups":[
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.4,"resetTime":"\(futureReset)"},
+                {"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1.0,"resetTime":"\(futureReset)"}
+              ]},
+              {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+                {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.6,"resetTime":"\(futureReset)"},
+                {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":0.85,"resetTime":"\(futureReset)"}
+              ]}
+            ]}
+            """)
+        ]
+
+        let merged = try await client.usage(for: ag1)
+        check(merged.plan == "Pro", "Expected Pro plan from loadCodeAssist")
+        check(merged.windows.isEmpty && merged.poolGroups.count == 2, "Antigravity must populate poolGroups")
+        check(merged.poolGroups.map(\.id) == ["claude-and-gpt-models", "gemini-models"], "Pool encounter order changed")
+        let claudePool = merged.poolGroups[0]
+        check(claudePool.windows.map(\.label) == ["5h", "7d"], "Buckets must sort 5h before 7d")
+        check(claudePool.windows.map(\.percent) == [0, 100], "Must convert remainingFraction to Used % and keep first endpoint value")
+        check(claudePool.windows[0].blockedByOuterLimit && !claudePool.windows[1].blockedByOuterLimit, "Exhausted weekly must flag 5h as blocked")
+        let geminiPool = merged.poolGroups[1]
+        check(geminiPool.description == "Models: Gemini Flash, Gemini Pro, Gemini Argon", "Gemini pool model tooltip mismatch")
+        check(geminiPool.windows.map(\.percent) == [15, 40], "Gemini remainingFraction -> Used % mismatch")
+        check(geminiPool.windows.allSatisfy { !$0.blockedByOuterLimit }, "Non-exhausted weekly must not dim 5h")
+        let quotaURLsHit = box.calls.compactMap { $0["url"] as? String }.filter { $0.contains("retrieveUserQuotaSummary") }
+        check(quotaURLsHit.count == 3, "Partial daily summary must probe fallback endpoints until Gemini is present")
+
+        // 2) Early stop when first endpoint already includes Gemini, plus server Date offset adjustment.
+        box.calls.removeAll()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let serverAhead = formatter.string(from: Date().addingTimeInterval(3600))
+        let resetTwoHoursFromLocal = ISO8601DateFormatter().string(from: Date().addingTimeInterval(7200))
+        box.quotaResponses = [
+            (200, ["Date": [serverAhead]], """
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.5,"resetTime":"\(resetTwoHoursFromLocal)"}
+            ]}]}
+            """)
+        ]
+        let fast = try await client.usage(for: agMeta)
+        let fastQuotaCalls = box.calls.filter { ($0["url"] as? String)?.contains("retrieveUserQuotaSummary") == true }
+        check(fastQuotaCalls.count == 1, "Must stop probing fallback URLs once Gemini pool is present")
+        if let adjusted = fast.poolGroups.first?.windows.first?.reset {
+            // Server is +1h ahead and reset is +2h from local => ~1h remaining relative to local clock.
+            let remaining = adjusted.timeIntervalSinceNow
+            check(remaining > 3400 && remaining < 3800, "Server Date header offset was not applied to reset time")
+        } else {
+            preconditionFailure("Expected parsed reset timestamp")
+        }
+
+        // 3) Missing project_id recovers via read-only loadCodeAssist (never downloads auth file), and respects 429 cooldown.
+        box.calls.removeAll()
+        box.paths.removeAll()
+        box.codeAssistResponse = (200, [:], #"{"paidTier":{"id":"g1-ultra-tier"},"cloudaicompanionProject":"recovered-proj"}"#)
+        box.quotaResponses = [
+            (200, [:], #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.75}]}]}"#)
+        ]
+        let recovered = try await client.usage(for: agNoProj)
+        check(recovered.plan == "Ultra" && recovered.poolGroups.first?.windows.first?.percent == 25, "loadCodeAssist project_id fallback failed")
+        check(box.paths.allSatisfy { !$0.contains("download") }, "Usagebar must never download auth files")
+        let recoveredQuotaBody = box.calls.last?["data"] as? String ?? ""
+        check(recoveredQuotaBody.contains("recovered-proj"), "Recovered project_id was not sent to quota endpoint")
+
+        // 4) loadCodeAssist 429 degrades silently without blocking quota and respects independent cooldown.
+        box.calls.removeAll()
+        box.codeAssistResponse = (429, ["Retry-After": ["600"]], "{}")
+        box.quotaResponses = [
+            (200, [:], #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.2}]}]}"#),
+            (200, [:], #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.3}]}]}"#)
+        ]
+        let degraded1 = try await client.usage(for: ag1)
+        check(degraded1.plan.isEmpty && degraded1.poolGroups.first?.windows.first?.percent == 80, "loadCodeAssist 429 broke quota")
+        let codeAssistCalls1 = box.calls.filter { ($0["url"] as? String)?.contains("loadCodeAssist") == true }.count
+        let degraded2 = try await client.usage(for: ag1)
+        check(degraded2.poolGroups.first?.windows.first?.percent == 70, "Second quota fetch failed under loadCodeAssist cooldown")
+        let codeAssistCalls2 = box.calls.filter { ($0["url"] as? String)?.contains("loadCodeAssist") == true }.count
+        check(codeAssistCalls1 == 1 && codeAssistCalls2 == 1, "loadCodeAssist ignored 429 cooldown")
+
+        // 5) Empty/malformed groups across all endpoints errors instead of showing zero.
+        box.quotaResponses = [
+            (200, [:], #"{"groups":[]}"#),
+            (200, [:], #"{"groups":[{"displayName":"Bad","buckets":[{"bucketId":"x","remainingFraction":true}]}]}"#),
+            (200, [:], #"{}"#)
+        ]
+        do {
+            _ = try await client.usage(for: ag1)
+            preconditionFailure("Empty Antigravity groups must throw an error")
+        } catch {}
+
+        // 6) ViewModel global hide-list persistence and Direct mode silence.
+        let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { _ in client })
+        await FakeProviders.reset()
+        await vm.refresh()
+        check(!vm.availableProviders.contains(.antigravity), "Direct mode must stay silent for Antigravity")
+
+        box.codeAssistResponse = (200, [:], #"{"currentTier":{"id":"free-tier"}}"#)
+        box.files = [
+            ["auth_index": "ag-1", "provider": "antigravity", "email": "ag1@example.invalid", "project_id": "proj-1"]
+        ]
+        box.quotaResponses = [
+            (200, [:], """
+            {"groups":[
+              {"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.9}]},
+              {"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","remainingFraction":0.5}]}
+            ]}
+            """)
+        ]
+        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        check(vm.discoveredAntigravityPools.map(\.id) == ["gemini-models", "claude-and-gpt-models"], "Discovered pools mismatch")
+        check(vm.isAntigravityPoolVisible("gemini-models") && vm.isAntigravityPoolVisible("claude-and-gpt-models"), "New pools must be visible by default")
+        vm.toggleAntigravityPool("gemini-models")
+        check(!vm.isAntigravityPoolVisible("gemini-models") && vm.isAntigravityPoolVisible("claude-and-gpt-models"), "Pool toggle failed")
+        // Verify persistence in UserDefaults across a fresh ViewModel instance.
+        let reloaded = UsageViewModel(startAutomatically: false, makeCPAClient: { _ in client })
+        check(!reloaded.isAntigravityPoolVisible("gemini-models") && reloaded.isAntigravityPoolVisible("argon"), "Hidden pool must persist while unseen upstream pools stay visible")
+        vm.showAllAntigravityPools()
+        check(vm.hiddenAntigravityPoolIDs.isEmpty, "Show All Pools did not clear hidden set")
+        try await vm.clearCPAConfiguration()
+        vm.stopAutoRefresh()
+        reloaded.stopAutoRefresh()
+        print("PASS: Antigravity CPA fallback/merge, Used %, weekly-exhausted 5h, loadCodeAssist cooldown, and pool hide-list")
     }
 }
 

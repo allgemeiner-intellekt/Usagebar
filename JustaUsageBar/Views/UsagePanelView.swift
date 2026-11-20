@@ -12,21 +12,43 @@ import Combine
 import SwiftUI
 
 struct UsagePanelRow: Identifiable {
+    let id: String
     let label: String
     let percent: Int
     let resetText: String
-    var id: String { label }
+    var dimmed: Bool = false
+    var helpText: String? = nil
+
+    init(id: String? = nil, label: String, percent: Int, resetText: String,
+         dimmed: Bool = false, helpText: String? = nil) {
+        self.id = id ?? label
+        self.label = label
+        self.percent = percent
+        self.resetText = resetText
+        self.dimmed = dimmed
+        self.helpText = helpText
+    }
+}
+
+struct UsagePanelPoolGroup: Identifiable {
+    let id: String
+    let label: String
+    let description: String?
+    let rows: [UsagePanelRow]
 }
 
 struct UsagePanelCard: Identifiable {
     let provider: DisplayProvider
     let detail: String
     let rows: [UsagePanelRow]
+    var poolGroups: [UsagePanelPoolGroup] = []
     /// An error or "Not authenticated", shown under the rows.
     var message: String?
     /// A button under the message, e.g. "How to authenticate Claude".
     var actionTitle: String?
     var accounts: [CPAAccount] = []
+    var hiddenPoolIDs: Set<String> = []
+    var allPoolsHidden = false
     var bankedResets: BankedResets?
     /// The source reads reset inventory, so a missing inventory means the read failed.
     var tracksBankedResets = false
@@ -225,6 +247,24 @@ struct UsagePanelCardView: View {
                             Text(window.resetText).font(.system(size: 12)).foregroundStyle(.secondary)
                         }
                     }
+                    let accountPoolGroups = account.reading?.poolGroups ?? []
+                    let visiblePoolGroups = accountPoolGroups.filter { !card.hiddenPoolIDs.contains($0.id) }
+                    ForEach(visiblePoolGroups) { group in
+                        PoolGroupView(
+                            label: group.label,
+                            description: group.description,
+                            rows: group.windows.map {
+                                UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
+                                              dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
+                            },
+                            meterColor: meterColor
+                        )
+                    }
+                    if !accountPoolGroups.isEmpty && visiblePoolGroups.isEmpty {
+                        Text("All pools hidden in Settings.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                     if let resets = account.reading?.bankedResets, resets.availableCount > 0 {
                         BankedResetSummaryView(resets: resets)
                     }
@@ -235,22 +275,23 @@ struct UsagePanelCardView: View {
                 }.padding(.top, 4)
             }
 
+            ForEach(card.poolGroups) { group in
+                PoolGroupView(
+                    label: group.label,
+                    description: group.description,
+                    rows: group.rows,
+                    meterColor: meterColor
+                )
+            }
+
+            if card.allPoolsHidden {
+                Text("All pools hidden in Settings.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
             ForEach(card.rows) { row in
-                HStack(spacing: 7) {
-                    Text(row.label)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .leading)
-                    UsageMeter(percent: row.percent, fill: meterColor)
-                    Text("\(row.percent)%")
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-                        .frame(width: 40, alignment: .trailing)
-                    Text(row.resetText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 58, alignment: .trailing)
-                }
+                UsageMeterRow(row: row, meterColor: meterColor)
             }
 
             if card.showsBankedResets, let resets = card.bankedResets {
@@ -259,9 +300,10 @@ struct UsagePanelCardView: View {
 
             if let message = card.message {
                 // "Not authenticated" has no rows and isn't an error.
+                let hasReadings = !card.rows.isEmpty || !card.poolGroups.isEmpty
                 Text(message)
                     .font(.system(size: 12))
-                    .foregroundStyle(card.rows.isEmpty ? Color.secondary : Color(nsColor: .systemOrange))
+                    .foregroundStyle(hasReadings ? Color(nsColor: .systemOrange) : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle = card.actionTitle {
@@ -297,6 +339,8 @@ struct UsagePanelCardView: View {
             } else {
                 Text("Codex").fontWeight(.semibold)
             }
+        case .antigravity:
+            Text("Antigravity").fontWeight(.semibold)
         case .cursor:
             templateImage(model.cursorMarks, height: 12)
         case .kimi:
@@ -444,6 +488,54 @@ private struct BankedResetExpirationText: View {
         case .unknown:
             Text(short ? "Unavailable" : "Expiration unavailable")
         }
+    }
+}
+
+private struct UsageMeterRow: View {
+    let row: UsagePanelRow
+    let meterColor: Color
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text(row.label)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 28, alignment: .leading)
+                .lineLimit(1)
+            UsageMeter(percent: row.percent, fill: meterColor)
+            Text("\(row.percent)%")
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .frame(width: 40, alignment: .trailing)
+            Text(row.resetText)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 58, alignment: .trailing)
+        }
+        .opacity(row.dimmed ? 0.45 : 1)
+        .help(row.helpText ?? "")
+    }
+}
+
+private struct PoolGroupView: View {
+    let label: String
+    let description: String?
+    let rows: [UsagePanelRow]
+    let meterColor: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(description ?? label)
+            ForEach(rows) { row in
+                UsageMeterRow(row: row, meterColor: meterColor)
+            }
+        }
+        .padding(.top, 2)
     }
 }
 

@@ -183,20 +183,33 @@ final class CPAClient {
             "Content-Type": "application/json",
             "User-Agent": Self.antigravityUserAgent
         ]
-        var projectID = account.projectID ?? resolvedAntigravityProjectIDs[account.id]
-        var plan = ""
-        var codeAssistAttempted = false
-
-        if projectID == nil {
-            codeAssistAttempted = true
-            let parsed = try await fetchAntigravityCodeAssist(for: account, headers: headers)
-            if let parsedPlan = parsed.plan, !parsedPlan.isEmpty { plan = parsedPlan }
-            if let fallbackProject = parsed.projectID, !fallbackProject.isEmpty { projectID = fallbackProject }
+        let cachedProjectID = account.projectID == nil ? resolvedAntigravityProjectIDs[account.id] : nil
+        if let projectID = account.projectID ?? cachedProjectID {
+            let poolGroups: [CPAPoolGroup]
+            do {
+                poolGroups = try await antigravityQuotaGroups(for: account, projectID: projectID, headers: headers)
+            } catch {
+                try Task.checkCancellation()
+                guard cachedProjectID != nil else { throw error }
+                let refreshed = try await fetchAntigravityCodeAssist(for: account, headers: headers)
+                guard let replacement = refreshed.projectID, replacement != projectID else { throw error }
+                let recovered = try await antigravityQuotaGroups(for: account, projectID: replacement, headers: headers)
+                return CPAReading(plan: refreshed.plan ?? "", windows: [], poolGroups: recovered)
+            }
+            let codeAssist = try await fetchAntigravityCodeAssist(for: account, headers: headers)
+            return CPAReading(plan: codeAssist.plan ?? "", windows: [], poolGroups: poolGroups)
         }
-        guard let resolvedProjectID = projectID, !resolvedProjectID.isEmpty else {
+
+        let codeAssist = try await fetchAntigravityCodeAssist(for: account, headers: headers)
+        guard let projectID = codeAssist.projectID else {
             throw CPAError.message("Antigravity account is missing project_id. Refresh or re-login this account in CPA.")
         }
-        let bodyBytes = try JSONSerialization.data(withJSONObject: ["project": resolvedProjectID])
+        let poolGroups = try await antigravityQuotaGroups(for: account, projectID: projectID, headers: headers)
+        return CPAReading(plan: codeAssist.plan ?? "", windows: [], poolGroups: poolGroups)
+    }
+
+    private func antigravityQuotaGroups(for account: CPAAccount, projectID: String, headers: [String: String]) async throws -> [CPAPoolGroup] {
+        let bodyBytes = try JSONSerialization.data(withJSONObject: ["project": projectID])
         let requestBody = String(decoding: bodyBytes, as: UTF8.self)
 
         var groupOrder: [String] = []
@@ -275,7 +288,7 @@ final class CPAClient {
                 if lhs.kind.sortOrder != rhs.kind.sortOrder { return lhs.kind.sortOrder < rhs.kind.sortOrder }
                 return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
             }
-            let weeklyExhausted = sorted.contains { $0.kind == .weekly && $0.percent >= 100 }
+            let weeklyExhausted = sorted.contains { $0.kind == .weekly && $0.remainingFraction <= 0 }
             let windows = sorted.map { bucket in
                 let blocked = weeklyExhausted && bucket.kind == .fiveHour && bucket.percent == 0
                 return CPAWindow(
@@ -298,11 +311,7 @@ final class CPAClient {
             throw CPAError.message("Quota data is unsupported or incomplete for this account.")
         }
 
-        if !codeAssistAttempted {
-            let parsed = try await fetchAntigravityCodeAssist(for: account, headers: headers)
-            if let parsedPlan = parsed.plan, !parsedPlan.isEmpty { plan = parsedPlan }
-        }
-        return CPAReading(plan: plan, windows: [], poolGroups: finalGroups)
+        return finalGroups
     }
 
     private func outbound(url: String, method: String = "GET", account: CPAAccount, headers: [String: String], bodyData: String? = nil) async throws -> OutboundResponse {
@@ -379,6 +388,7 @@ final class CPAClient {
         let label: String
         let kind: AntigravityBucketKind
         let percent: Int
+        let remainingFraction: Double
         let reset: Date?
     }
 
@@ -567,6 +577,7 @@ final class CPAClient {
                     label: compactLabel,
                     kind: kind,
                     percent: min(100, max(0, usedPercent)),
+                    remainingFraction: clamped,
                     reset: resetDate
                 ))
             }

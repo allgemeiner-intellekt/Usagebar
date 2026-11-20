@@ -456,6 +456,36 @@ extension PerformanceRegressionTests {
         let recoveredQuotaBody = box.calls.last?["data"] as? String ?? ""
         check(recoveredQuotaBody.contains("recovered-proj"), "Recovered project_id was not sent to quota endpoint")
 
+        // A cached project can become stale even though CPA still lists the same account.
+        box.calls.removeAll()
+        box.codeAssistResponse = (200, [:], #"{"paidTier":{"id":"g1-pro-tier"},"cloudaicompanionProject":"new-proj"}"#)
+        box.quotaResponses = [
+            (404, [:], "{}"),
+            (404, [:], "{}"),
+            (404, [:], "{}"),
+            (200, [:], """
+            {"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":1.0},
+              {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.004}
+            ]}]}
+            """)
+        ]
+        let reassigned = try await client.usage(for: agNoProj)
+        let reassignedWindows = reassigned.poolGroups[0].windows
+        check(reassigned.plan == "Pro" && reassignedWindows.map(\.percent) == [0, 100],
+              "Changed project must recover usage with rounded display percentages")
+        check(!reassignedWindows[0].blockedByOuterLimit, "Positive weekly remainder must not block the 5h window")
+        let projectRequests = try box.calls.filter {
+            ($0["url"] as? String)?.hasSuffix(":retrieveUserQuotaSummary") == true
+        }.compactMap { call -> String? in
+            guard let body = call["data"] as? String else { return nil }
+            return (try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: String])?["project"]
+        }
+        check(projectRequests == ["recovered-proj", "recovered-proj", "recovered-proj", "new-proj"],
+              "Refresh must retry quota once with the newly resolved project")
+        let resolutionCalls = box.calls.filter { ($0["url"] as? String)?.hasSuffix(":loadCodeAssist") == true }
+        check(resolutionCalls.count == 1, "Recovery must resolve the project only once")
+
         // 4) loadCodeAssist 429 degrades silently without blocking quota and respects independent cooldown.
         box.calls.removeAll()
         box.codeAssistResponse = (429, ["Retry-After": ["600"]], "{}")

@@ -70,9 +70,6 @@ final class UsagePanelModel: ObservableObject {
     @Published var emptyMessage: String?
     @Published var maximumContentHeight: CGFloat = 600
 
-    var cursorMarks: NSImage?
-    var zcodeMark: NSImage?
-
     var onResize: () -> Void = {}
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
@@ -325,50 +322,24 @@ struct UsagePanelCardView: View {
         )
     }
 
-    @ViewBuilder private var mark: some View {
-        switch card.provider {
-        case .claude:
-            HStack(spacing: 6) {
-                templateImage(NSImage(named: "ClaudeSpark"), height: 15)
-                    .foregroundStyle(Color(nsColor: .usagebarClaudeOrange))
-                Text("Claude").fontWeight(.semibold)
+    /// Every card gets the same header: the provider's mark in its accent
+    /// color, then its name.
+    private var mark: some View {
+        HStack(spacing: 6) {
+            if let image = NSImage(named: card.provider.panelMarkName), image.size.height > 0 {
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 14 * image.size.width / image.size.height, height: 14)
+                    .foregroundStyle(meterColor)
             }
-        case .codex:
-            if let lockup = NSImage(named: "CodexLockup") {
-                templateImage(lockup, height: 16)
-            } else {
-                Text("Codex").fontWeight(.semibold)
-            }
-        case .antigravity:
-            Text("Antigravity").fontWeight(.semibold)
-        case .cursor:
-            templateImage(model.cursorMarks, height: 12)
-        case .kimi:
-            Text("KimiCode")
-                .fontWeight(.semibold)
-                .foregroundStyle(Color(red: 0.10, green: 0.52, blue: 1.0))
-        case .zai:
-            HStack(spacing: 1.7) {
-                templateImage(model.zcodeMark, height: 10.6)
-                Text("Code").fontWeight(.semibold)
-            }
-        case .xai:
-            Text("XAI").fontWeight(.semibold)
-        }
-    }
-
-    @ViewBuilder private func templateImage(_ image: NSImage?, height: CGFloat) -> some View {
-        if let image, image.size.height > 0 {
-            Image(nsImage: image)
-                .renderingMode(.template)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: height * image.size.width / image.size.height, height: height)
+            Text(card.provider.panelTitle).fontWeight(.semibold)
         }
     }
 
     private var meterColor: Color {
-        card.provider == .claude ? Color(nsColor: .usagebarClaudeOrange) : .primary
+        Color(nsColor: card.provider.panelAccent)
     }
 
     private var cardFill: Color {
@@ -630,6 +601,59 @@ private struct AnchorView: NSViewRepresentable {
 extension NSColor {
     /// Claude's orange from its spark mark, #D97757.
     static let usagebarClaudeOrange = NSColor(red: 0.851, green: 0.467, blue: 0.341, alpha: 1)
+
+    /// A color that switches between `light` and `dark` with the appearance.
+    fileprivate static func usagebarAdaptive(light: UInt32, dark: UInt32) -> NSColor {
+        func rgb(_ hex: UInt32) -> NSColor {
+            NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                    green: CGFloat((hex >> 8) & 0xFF) / 255,
+                    blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        }
+        return NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? rgb(dark) : rgb(light)
+        }
+    }
+}
+
+/// Panel card branding: mark asset, title and accent for icon and meters.
+/// Claude, Antigravity and KimiCode use their brand colors; the others are
+/// monochrome brands, so their accents are chosen to tell cards apart.
+extension DisplayProvider {
+    var panelMarkName: String {
+        switch self {
+        case .claude: "ClaudeSpark"
+        case .codex: "CodexMark"
+        case .antigravity: "AntigravityMark"
+        case .cursor: "CursorMark"
+        case .kimi: "KimiMark"
+        case .zai: "ZaiMark"
+        case .xai: "XaiMark"
+        }
+    }
+
+    var panelTitle: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .antigravity: "Antigravity"
+        case .cursor: "Cursor"
+        case .kimi: "KimiCode"
+        case .zai: "Z.ai"
+        case .xai: "XAI"
+        }
+    }
+
+    var panelAccent: NSColor {
+        switch self {
+        case .claude: .usagebarAdaptive(light: 0xD97757, dark: 0xE08A6D)
+        case .codex: .usagebarAdaptive(light: 0x10A37F, dark: 0x2FC59E)
+        case .antigravity: .usagebarAdaptive(light: 0x3B78E7, dark: 0x6A9CF4)
+        case .cursor: .usagebarAdaptive(light: 0x7C5CFF, dark: 0x9C86FF)
+        case .kimi: .usagebarAdaptive(light: 0x1A85FF, dark: 0x4DA1FF)
+        case .zai: .usagebarAdaptive(light: 0x0F9AA8, dark: 0x2EC4D1)
+        case .xai: .usagebarAdaptive(light: 0x6B7280, dark: 0xA1A1AA)
+        }
+    }
 }
 
 /// A borderless panel under the status item that closes on an outside click

@@ -256,6 +256,7 @@ struct StatusRenderingTests {
         NSApp.setActivationPolicy(.accessory)
         try await testCPAStorage()
         try await CodexAPIService.verifyBankedResets()
+        verifyGlobalHotkey()
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
         let delegate = AppDelegate(viewModel: model)

@@ -7,7 +7,7 @@ import SwiftUI
 import AppKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated private static let lastLaunchedAppDescriptorDefaultsKey = "lastLaunchedAppDescriptor"
     nonisolated private static let lastUpdateCheckAtDefaultsKey = "lastUpdateCheckAt"
     nonisolated private static let lastInstalledUpdateAtDefaultsKey = "lastInstalledUpdateAt"
@@ -19,19 +19,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     nonisolated private static let updateFailureFileName = "update-failure.txt"
 
     private var statusItem: NSStatusItem!
-    private var menu: NSMenu!
-    private var isMenuOpen = false {
-        didSet { viewModel.usageVisibilityChanged(isVisible: isMenuOpen || isPanelOpen) }
-    }
     private let panelModel = UsagePanelModel()
     private lazy var panel: UsagePanel = {
         let panel = UsagePanel(rootView: UsagePanelView(model: panelModel))
         panel.onClose = { [weak self] in self?.isPanelOpen = false }
+        panel.onOpenSettings = { [weak self] in self?.showSettings() }
+        panel.onRefresh = { [weak self] in
+            self?.panelModel.isRefreshing = true
+            self?.refreshData()
+        }
+        panel.onQuit = { NSApp.terminate(nil) }
         return panel
     }()
-    /// While the panel is open every provider refreshes at the on-screen rate.
+    /// While the panel or settings window is open every provider refreshes at the on-screen rate.
     private var isPanelOpen = false {
-        didSet { viewModel.usageVisibilityChanged(isVisible: isMenuOpen || isPanelOpen) }
+        didSet { viewModel.usageVisibilityChanged(isVisible: isPanelOpen || isSettingsOpen) }
+    }
+    private var isSettingsOpen = false {
+        didSet { viewModel.usageVisibilityChanged(isVisible: isPanelOpen || isSettingsOpen) }
     }
     private let viewModel: UsageViewModel
 
@@ -44,11 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         super.init()
     }
 
-    private var sourceWindow: NSWindow?
-    private var credentialsWindow: NSWindow?
+    private let settingsNavigation = SettingsNavigationModel()
+    private var settingsWindow: NSWindow?
 
     // Update availability state
-    private var availableUpdateVersion: String?
+    private var availableUpdateVersion: String? {
+        didSet { settingsNavigation.availableUpdateVersion = availableUpdateVersion }
+    }
     private var lastReleaseCheckAt: Date?
     private var isUpdateRunning = false
     nonisolated private static let releaseCheckInterval: TimeInterval = 6 * 3600
@@ -61,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         setupStatusItem()
-        setupMenu()
+        configureSettingsNavigation()
         observeChanges()
         recordInstalledAppVersionIfNeeded()
 
@@ -87,11 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func settingsChanged() {
         viewModel.providerSettingsChanged()
-        rebuildMenu()
+        updatePanel()
     }
 
     @objc private func usageDataChanged() {
-        rebuildMenu()
+        updatePanel()
         maybeCheckForUpdateInBackground()
     }
 
@@ -121,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard release.version.compare(installedVersion, options: .numeric) == .orderedDescending else {
             if availableUpdateVersion != nil {
                 availableUpdateVersion = nil
-                rebuildMenu()
+                updatePanel()
             }
             return
         }
@@ -129,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let isNewDiscovery = availableUpdateVersion != release.version
         availableUpdateVersion = release.version
         if isNewDiscovery {
-            rebuildMenu()
+            updatePanel()
 
             let defaults = UserDefaults.standard
             let lastAttempted = defaults.string(forKey: Self.lastAutoUpdateVersionDefaultsKey)
@@ -158,231 +165,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func setupMenu() {
-        menu = NSMenu()
-        menu.delegate = self
-        // Don't set statusItem.menu - we handle clicks manually
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        guard !isMenuOpen else { return }
-        isMenuOpen = true
-        rebuildMenu()
-    }
-
-    func menuDidClose(_ menu: NSMenu) {
-        isMenuOpen = false
-    }
-
-    private func rebuildMenu() {
-        updatePanel()
-        // Countdown labels are recomputed on open. Closed menus need no work,
-        // and replacing the items would close a submenu the pointer is in.
-        guard isMenuOpen, menu.highlightedItem?.submenu == nil else { return }
-        menu.removeAllItems()
-
-        let sourceItem = NSMenuItem(title: "Data source…", action: #selector(showSourceSettings), keyEquivalent: "")
-        sourceItem.target = self
-        menu.addItem(sourceItem)
-
-        let hasClaude = viewModel.hasClaudeCredentials
-        let hasCodex = viewModel.hasCodexCredentials
-        let hasCursor = viewModel.hasCursorCredentials
-        let hasZai = viewModel.hasZaiCredentials
-        let hasXai = viewModel.hasXaiCredentials
-        let hasKimi = viewModel.hasKimiCredentials
-
-        if viewModel.source == .cpa {
-            let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshData), keyEquivalent: "r")
-            refreshItem.target = self
-            menu.addItem(refreshItem)
-            for provider in DisplayProvider.displayOrder {
-                let (title, selector, shown): (String, Selector, Bool) = switch provider {
-                case .claude: ("Show Claude", #selector(toggleShowClaude), viewModel.showClaude)
-                case .codex: ("Show Codex", #selector(toggleShowCodex), viewModel.showCodex)
-                case .antigravity: ("Show Antigravity", #selector(toggleShowAntigravity), viewModel.showAntigravity)
-                case .cursor: ("Show Cursor", #selector(toggleShowCursor), viewModel.showCursor)
-                case .kimi: ("Show KimiCode", #selector(toggleShowKimi), viewModel.showKimi)
-                case .zai: ("Show Z.ai", #selector(toggleShowZai), viewModel.showZai)
-                case .xai: ("Show XAI", #selector(toggleShowXai), viewModel.showXai)
-                }
-                let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-                item.target = self
-                item.state = shown ? .on : .off
-                menu.addItem(item)
-                if provider == .antigravity, viewModel.hasAntigravityAccounts || !viewModel.hiddenAntigravityPoolIDs.isEmpty {
-                    let poolsMenu = NSMenu()
-                    let pools = viewModel.discoveredAntigravityPools
-                    if pools.isEmpty {
-                        let empty = NSMenuItem(title: "No pools loaded yet", action: nil, keyEquivalent: "")
-                        empty.isEnabled = false
-                        poolsMenu.addItem(empty)
-                    } else {
-                        for pool in pools {
-                            let poolItem = NSMenuItem(title: pool.label, action: #selector(toggleAntigravityPool(_:)), keyEquivalent: "")
-                            poolItem.target = self
-                            poolItem.representedObject = pool.id
-                            poolItem.state = viewModel.isAntigravityPoolVisible(pool.id) ? .on : .off
-                            poolsMenu.addItem(poolItem)
-                        }
-                    }
-                    poolsMenu.addItem(NSMenuItem.separator())
-                    let showAllItem = NSMenuItem(title: "Show All Pools", action: #selector(showAllAntigravityPools), keyEquivalent: "")
-                    showAllItem.target = self
-                    showAllItem.isEnabled = !viewModel.hiddenAntigravityPoolIDs.isEmpty
-                    poolsMenu.addItem(showAllItem)
-                    let poolsRoot = NSMenuItem(title: "Antigravity Pools", action: nil, keyEquivalent: "")
-                    poolsRoot.submenu = poolsMenu
-                    menu.addItem(poolsRoot)
-                }
-            }
-        } else if !hasClaude && !hasCodex && !hasCursor && !hasZai && !hasXai && !hasKimi {
-            let setupItem = NSMenuItem(title: "Setup Usage Tracking", action: #selector(showCredentialsWindow), keyEquivalent: "")
-            setupItem.target = self
-            menu.addItem(setupItem)
-
-            let kimiSetupItem = NSMenuItem(title: "Set Up KimiCode…", action: #selector(authenticateKimi), keyEquivalent: "")
-            kimiSetupItem.target = self
-            menu.addItem(kimiSetupItem)
-        } else {
-            // Refresh
-            let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshData), keyEquivalent: "r")
-            refreshItem.target = self
-            menu.addItem(refreshItem)
-
-            let updatesMenu = NSMenu()
-            for provider in DisplayProvider.displayOrder where viewModel.refreshTargets.contains(provider) {
-                let title: String = switch provider {
-                case .claude: "Claude"
-                case .codex: "Codex"
-                case .antigravity: "Antigravity"
-                case .cursor: "Cursor"
-                case .kimi: "KimiCode"
-                case .zai: "z.ai"
-                case .xai: "XAI"
-                }
-                let item = NSMenuItem(title: "\(title): \(viewModel.freshnessText(for: provider))", action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                updatesMenu.addItem(item)
-            }
-            let updatesItem = NSMenuItem(title: "Last Updates", action: nil, keyEquivalent: "")
-            updatesItem.submenu = updatesMenu
-            menu.addItem(updatesItem)
-
-            // Display submenu
-            let displayMenu = NSMenu()
-
-            // Provider toggles
-            if hasClaude {
-                let claudeToggle = NSMenuItem(title: "Show Claude", action: #selector(toggleShowClaude), keyEquivalent: "")
-                claudeToggle.target = self
-                claudeToggle.state = viewModel.showClaude ? .on : .off
-                displayMenu.addItem(claudeToggle)
-            }
-
-            if hasCodex {
-                let codexToggle = NSMenuItem(title: "Show Codex", action: #selector(toggleShowCodex), keyEquivalent: "")
-                codexToggle.target = self
-                codexToggle.state = viewModel.showCodex ? .on : .off
-                displayMenu.addItem(codexToggle)
-            }
-
-            if hasCursor {
-                let cursorToggle = NSMenuItem(title: "Show Cursor", action: #selector(toggleShowCursor), keyEquivalent: "")
-                cursorToggle.target = self
-                cursorToggle.state = viewModel.showCursor ? .on : .off
-                displayMenu.addItem(cursorToggle)
-            }
-
-            if hasKimi {
-                let kimiToggle = NSMenuItem(title: "Show KimiCode", action: #selector(toggleShowKimi), keyEquivalent: "")
-                kimiToggle.target = self
-                kimiToggle.state = viewModel.showKimi ? .on : .off
-                displayMenu.addItem(kimiToggle)
-            }
-
-            if hasZai {
-                let zaiToggle = NSMenuItem(title: "Show z.ai", action: #selector(toggleShowZai), keyEquivalent: "")
-                zaiToggle.target = self
-                zaiToggle.state = viewModel.showZai ? .on : .off
-                displayMenu.addItem(zaiToggle)
-            }
-
-            if hasXai {
-                let xaiToggle = NSMenuItem(title: "Show XAI", action: #selector(toggleShowXai), keyEquivalent: "")
-                xaiToggle.target = self
-                xaiToggle.state = viewModel.showXai ? .on : .off
-                displayMenu.addItem(xaiToggle)
-            }
-
-            let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
-            displayItem.submenu = displayMenu
-            menu.addItem(displayItem)
-
-            // Launch at login
-            let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-            launchItem.target = self
-            launchItem.state = viewModel.launchAtStartup ? .on : .off
-            menu.addItem(launchItem)
-
-            menu.addItem(NSMenuItem.separator())
-
-            // Sign out options
-            if hasClaude {
-                let signOutClaude = NSMenuItem(title: "Sign Out Claude", action: #selector(signOutClaude), keyEquivalent: "")
-                signOutClaude.target = self
-                menu.addItem(signOutClaude)
-            }
-
-            if hasCodex {
-                let signOutCodex = NSMenuItem(title: "Sign Out Codex", action: #selector(signOutCodex), keyEquivalent: "")
-                signOutCodex.target = self
-                menu.addItem(signOutCodex)
-            }
-
-            if viewModel.hasSavedKimiCredential {
-                let forgetKimi = NSMenuItem(title: "Forget Saved KimiCode Credential", action: #selector(clearKimiCredential), keyEquivalent: "")
-                forgetKimi.target = self
-                menu.addItem(forgetKimi)
-            } else if !hasKimi {
-                let setupKimi = NSMenuItem(title: "Set Up KimiCode…", action: #selector(authenticateKimi), keyEquivalent: "")
-                setupKimi.target = self
-                menu.addItem(setupKimi)
-            }
-        }
-
-        menu.addItem(NSMenuItem.separator())
-
-        let reviewRepoItem = NSMenuItem(title: "Review GitHub Repo", action: #selector(openGitHubRepository), keyEquivalent: "")
-        reviewRepoItem.target = self
-        if let githubMark = NSImage(named: "GitHubMark") {
-            githubMark.size = NSSize(width: 14, height: 14)
-            reviewRepoItem.image = githubMark
-        }
-        menu.addItem(reviewRepoItem)
-
-        // Check for Updates / update available badge
-        if let updateVersion = availableUpdateVersion {
-            let updateItem = NSMenuItem(title: "Update to v\(updateVersion) (1)", action: #selector(checkForUpdates), keyEquivalent: "u")
-            updateItem.target = self
-            updateItem.attributedTitle = NSAttributedString(
-                string: "Update to v\(updateVersion)  (1)",
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-                    .foregroundColor: brandClaudeColor
-                ]
-            )
-            menu.addItem(updateItem)
-        } else {
-            let updateItem = NSMenuItem(title: "Download Personal Build…", action: #selector(checkForUpdates), keyEquivalent: "u")
-            updateItem.target = self
-            menu.addItem(updateItem)
-        }
-
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quitItem)
-    }
-
     // MARK: - Usage Panel
 
     private func togglePanel() {
@@ -397,8 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.show(below: button)
     }
 
-    /// Fills the panel from the normalized usage models. Runs whenever the
-    /// open menu would be rebuilt.
+    /// Fills the panel from the normalized usage models while it is open.
     private func updatePanel() {
         guard isPanelOpen else { return }
         panelModel.maximumContentHeight = max(100, (statusItem.button?.window?.screen?.visibleFrame.height ?? 768) - 120)
@@ -563,11 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async { self?.panel.fitContent() }
         }
         panelModel.onAction = { [weak self] provider in
-            self?.panel.close()
             switch provider {
-            case .claude: self?.authenticateClaude()
-            case .codex: self?.authenticateCodex()
-            case .kimi: self?.authenticateKimi()
+            case .claude: self?.showSettings(section: .providers, setupSheet: .claude)
+            case .codex: self?.showSettings(section: .providers, setupSheet: .codex)
+            case .kimi: self?.showSettings(section: .providers, setupSheet: .kimi)
             case .antigravity, .cursor, .zai, .xai: break
             }
         }
@@ -575,239 +355,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.panelModel.isRefreshing = true
             self?.refreshData()
         }
-        panelModel.onMore = { [weak self] anchor in
-            guard let self else { return }
-            self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.maxY + 4), in: anchor)
+        panelModel.onSettings = { [weak self] in
+            self?.showSettings()
         }
         panelModel.onUpdate = { [weak self] in self?.checkForUpdates() }
         panelModel.onSetup = { [weak self] in
-            self?.panel.close()
-            self?.showCredentialsWindow()
+            self?.showSettings(section: .providers)
         }
         panelModel.onSetUpKimi = { [weak self] in
-            self?.panel.close()
-            self?.authenticateKimi()
+            self?.showSettings(section: .providers, setupSheet: .kimi)
         }
         panelModel.onQuit = { NSApp.terminate(nil) }
+    }
+
+    private func configureSettingsNavigation() {
+        let info = Self.installedAppInfo()
+        settingsNavigation.installedVersion = info.version
+        settingsNavigation.installedBuild = info.build
+        settingsNavigation.availableUpdateVersion = availableUpdateVersion
+        settingsNavigation.onRefresh = { [weak self] in self?.refreshData() }
+        settingsNavigation.onOpenGitHub = { [weak self] in self?.openGitHubRepository() }
+        settingsNavigation.onCheckForUpdates = { [weak self] in self?.checkForUpdates() }
     }
 
     @objc private func statusBarButtonClicked() {
         togglePanel()
     }
 
-    @objc private func showSourceSettings() {
-        if sourceWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 310),
-                styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "Usagebar data source"
-            window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SourceSettingsView(viewModel: viewModel))
-            window.center()
-            sourceWindow = window
+    func showSettings(section: SettingsSection? = nil, setupSheet: ProviderSetupSheet? = nil) {
+        if panel.isVisible {
+            panel.close()
         }
-        NSApp.activate(ignoringOtherApps: true)
-        sourceWindow?.makeKeyAndOrderFront(nil)
-    }
+        configureSettingsNavigation()
+        if let section {
+            settingsNavigation.selectedSection = section
+        }
+        settingsNavigation.activeSetupSheet = setupSheet
 
-    @objc private func showCredentialsWindow() {
-        if credentialsWindow == nil {
-            let contentView = CredentialsView(onSave: { [weak self] sessionKey, orgId in
-                self?.viewModel.saveCredentials(sessionKey: sessionKey, organizationId: orgId)
-                self?.credentialsWindow?.close()
-                self?.credentialsWindow = nil
-                self?.rebuildMenu()
-            })
-
+        if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 320, height: 420),
-                styleMask: [.titled, .closable, .fullSizeContentView],
+                contentRect: NSRect(x: 0, y: 0, width: 660, height: 480),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
-            window.title = ""
-            window.titlebarAppearsTransparent = true
-            window.standardWindowButton(.closeButton)?.isHidden = true
-            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            window.standardWindowButton(.zoomButton)?.isHidden = true
-            window.contentView = NSHostingView(rootView: contentView)
-            window.center()
+            window.title = "Usagebar Settings"
+            window.minSize = NSSize(width: 580, height: 400)
             window.isReleasedWhenClosed = false
-            credentialsWindow = window
+            window.delegate = self
+            window.contentView = NSHostingView(
+                rootView: SettingsView(viewModel: viewModel, navigation: settingsNavigation)
+            )
+            window.center()
+            settingsWindow = window
         }
 
-        credentialsWindow?.makeKeyAndOrderFront(nil)
+        isSettingsOpen = true
         NSApp.activate(ignoringOtherApps: true)
+        if settingsWindow?.isMiniaturized == true {
+            settingsWindow?.deminiaturize(nil)
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        isSettingsOpen = false
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        isSettingsOpen = false
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        isSettingsOpen = true
     }
 
     @objc private func refreshData() {
         Task {
             await viewModel.rediscoverCredentialsAndRefresh()
         }
-    }
-
-    @objc private func authenticateClaude() {
-        let alert = NSAlert()
-        alert.messageText = "Authenticate Claude"
-        alert.informativeText = """
-        Open Terminal, run `claude`, and log in when prompted.
-        Then click Refresh in Usagebar and your usage will appear.
-
-        This also fixes "Session expired": re-logging in from the \
-        terminal renews the credentials Usagebar reads.
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Manual Setup…")
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertSecondButtonReturn {
-            showCredentialsWindow()
-        }
-    }
-
-    @objc private func authenticateCodex() {
-        presentAlert(
-            title: "Authenticate Codex",
-            message: "Run `codex login` in Terminal, then click Refresh in Usagebar.",
-            style: .informational
-        )
-    }
-
-    @objc private func authenticateKimi() {
-        let alert = NSAlert()
-        alert.messageText = "Set Up KimiCode"
-        alert.informativeText = """
-        Run `kimi login` in Terminal, then click Refresh in Usagebar.
-
-        Usagebar reads Kimi Code CLI's local OAuth credential without changing it. You can also paste a Kimi Code API key or a `kimi-auth` web token.
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Paste Credential…")
-        alert.addButton(withTitle: "Open KimiCode Console")
-        NSApp.activate(ignoringOtherApps: true)
-
-        switch alert.runModal() {
-        case .alertSecondButtonReturn:
-            showKimiCredentialPrompt()
-        case .alertThirdButtonReturn:
-            if let url = URL(string: "https://www.kimi.com/code/console") {
-                NSWorkspace.shared.open(url)
-            }
-        default:
-            break
-        }
-    }
-
-    private func showKimiCredentialPrompt() {
-        let alert = NSAlert()
-        alert.messageText = "KimiCode Credential"
-        alert.informativeText = "Paste a Kimi Code API key or the `kimi-auth` token from the Kimi Code console. It is encrypted locally."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-
-        let credentialField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        credentialField.placeholderString = "API key or kimi-auth token"
-        alert.accessoryView = credentialField
-
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let credential = credentialField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !credential.isEmpty else { return }
-        viewModel.saveKimiCredential(credential)
-        rebuildMenu()
-    }
-
-    @objc private func toggleAutoUpdate() {
-        viewModel.autoUpdate.toggle()
-        rebuildMenu()
-    }
-
-    /// Re-enables the just-toggled provider if hiding it would leave no
-    /// authenticated provider in the panel.
-    private func ensureAProviderRemainsShown(fallback keyPath: ReferenceWritableKeyPath<UsageViewModel, Bool>) {
-        let anyShown =
-            (viewModel.showClaude && viewModel.hasClaudeCredentials) ||
-            (viewModel.showCodex && viewModel.hasCodexCredentials) ||
-            (viewModel.showAntigravity && viewModel.hasAntigravityCredentials) ||
-            (viewModel.showCursor && viewModel.hasCursorCredentials) ||
-            (viewModel.showKimi && viewModel.hasKimiCredentials) ||
-            (viewModel.showZai && viewModel.hasZaiCredentials) ||
-            (viewModel.showXai && viewModel.hasXaiCredentials)
-        if !anyShown {
-            viewModel[keyPath: keyPath] = true
-        }
-    }
-
-    @objc private func toggleShowClaude() {
-        viewModel.showClaude.toggle()
-        ensureAProviderRemainsShown(fallback: \.showClaude)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleShowCodex() {
-        viewModel.showCodex.toggle()
-        ensureAProviderRemainsShown(fallback: \.showCodex)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleShowAntigravity() {
-        viewModel.showAntigravity.toggle()
-        ensureAProviderRemainsShown(fallback: \.showAntigravity)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleAntigravityPool(_ sender: NSMenuItem) {
-        guard let poolID = sender.representedObject as? String, !poolID.isEmpty else { return }
-        viewModel.toggleAntigravityPool(poolID)
-    }
-
-    @objc private func showAllAntigravityPools() {
-        viewModel.showAllAntigravityPools()
-    }
-
-    @objc private func toggleShowCursor() {
-        viewModel.showCursor.toggle()
-        ensureAProviderRemainsShown(fallback: \.showCursor)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleShowKimi() {
-        viewModel.showKimi.toggle()
-        ensureAProviderRemainsShown(fallback: \.showKimi)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleShowZai() {
-        viewModel.showZai.toggle()
-        ensureAProviderRemainsShown(fallback: \.showZai)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleShowXai() {
-        viewModel.showXai.toggle()
-        ensureAProviderRemainsShown(fallback: \.showXai)
-        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
-    }
-
-    @objc private func toggleLaunchAtLogin() {
-        viewModel.launchAtStartup.toggle()
-        rebuildMenu()
-    }
-
-    @objc private func signOutClaude() {
-        viewModel.clearClaudeCredentials()
-        rebuildMenu()
-    }
-
-    @objc private func signOutCodex() {
-        viewModel.clearCodexCredentials()
-        rebuildMenu()
-    }
-
-    @objc private func clearKimiCredential() {
-        viewModel.clearKimiCredential()
-        rebuildMenu()
     }
 
     @objc private func checkForUpdates() {
@@ -844,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
             case .alreadyUpToDate(let status):
                 availableUpdateVersion = nil
-                rebuildMenu()
+                updatePanel()
                 if interactive {
                     presentAlert(
                         title: "Already up to date",
@@ -859,7 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 UserDefaults.standard.removeObject(forKey: Self.lastAutoUpdateVersionDefaultsKey)
                 // Allow the next background check (and auto-retry) in ~10 minutes.
                 lastReleaseCheckAt = Date().addingTimeInterval(-Self.releaseCheckInterval + 600)
-                rebuildMenu()
+                updatePanel()
                 if interactive {
                     let version = status.latestRelease?.version ?? "the new version"
                     presentAlert(
@@ -869,7 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     )
                 }
             case .failed(let status, let message):
-                rebuildMenu()
+                updatePanel()
                 if interactive {
                     presentAlert(
                         title: "Update failed",
@@ -1034,13 +663,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func failureMessage(_ message: String, status: UpdateStatus) -> String {
         "\(message)\n\n\(alreadyUpToDateMessage(for: status))"
-    }
-
-    private func formatMenuTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
     }
 
     private func formatAlertTimestamp(_ date: Date) -> String {
@@ -1301,189 +923,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Helpers
 
-    private var brandClaudeColor: NSColor {
-        NSColor(red: 0.83, green: 0.53, blue: 0.30, alpha: 1.0)
-    }
-
     private var shouldPromptClaudeAuthentication: Bool {
         !viewModel.hasClaudeCredentials || viewModel.claudeError != nil
     }
 
     private var shouldPromptCodexAuthentication: Bool {
         !viewModel.hasCodexCredentials || viewModel.codexError == APIError.unauthorized.errorDescription
-    }
-}
-
-// MARK: - Credentials View (for setup window)
-
-struct CredentialsView: View {
-    let onSave: (String, String) -> Void
-    @ObservedObject private var viewModel = UsageViewModel.shared
-
-    @State private var showManualEntry = false
-    @State private var sessionKey = ""
-    @State private var organizationId = ""
-
-    private let anthropicOrange = Color(red: 0.83, green: 0.53, blue: 0.30)
-
-    var body: some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack(spacing: 4) {
-                Text("\u{2733}\u{FE0E}")
-                    .foregroundColor(anthropicOrange)
-                    .font(.title2)
-                Text("Claude Usage")
-                    .font(.headline)
-            }
-            .padding(.top, 8)
-
-            // Auto-detected status
-            VStack(spacing: 8) {
-                if viewModel.hasClaudeCredentials {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text("Claude detected")
-                            .font(.caption)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
-
-                if viewModel.hasCodexCredentials {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text("Codex detected")
-                            .font(.caption)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
-            }
-
-            if viewModel.hasClaudeCredentials || viewModel.hasCodexCredentials {
-                VStack(spacing: 10) {
-                    if viewModel.hasClaudeCredentials {
-                        Button(action: {
-                            onSave("__oauth__", "__oauth__")
-                        }) {
-                            HStack {
-                                Image(systemName: "sparkles")
-                                Text("Use Claude Detected Credentials")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(anthropicOrange)
-                    }
-
-                    if viewModel.hasCodexCredentials {
-                        Button(action: {
-                            onSave("__detected_codex__", "__detected_codex__")
-                        }) {
-                            HStack {
-                                Image(systemName: "terminal")
-                                Text("Use Codex Detected Credentials")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(anthropicOrange)
-                    }
-                }
-
-                Divider()
-                    .padding(.vertical, 4)
-            }
-
-            if !showManualEntry {
-                Spacer()
-                VStack(spacing: 16) {
-                    Text("Manual Claude setup")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-
-                    Divider()
-                        .padding(.vertical, 4)
-
-                    Button(action: { showManualEntry = true }) {
-                        HStack {
-                            Image(systemName: "keyboard")
-                            Text("Manual Entry")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Text("For advanced users")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-            } else {
-                // Manual entry form
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Manual Credential Entry")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Organization ID")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                        Text("From URL: claude.ai/chat \u{2192} copy UUID after /organizations/")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        TextField("263e9fcb-52b9-4372-8842-...", text: $organizationId)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Session Key")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                        Text("From DevTools \u{2192} Application \u{2192} Cookies \u{2192} sessionKey")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                        SecureField("sk-ant-sid01-...", text: $sessionKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    HStack {
-                        Button("\u{2190} Back") {
-                            showManualEntry = false
-                        }
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                        Spacer()
-
-                        Button("Save") {
-                            onSave(sessionKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                                   organizationId.trimmingCharacters(in: .whitespacesAndNewlines))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(anthropicOrange)
-                        .disabled(sessionKey.isEmpty || organizationId.isEmpty)
-                    }
-                }
-            }
-
-            Spacer()
-
-            Text("Not affiliated with Anthropic or OpenAI.\nCredentials stored locally (encrypted).")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding()
-        .frame(width: 300, height: 400)
     }
 }

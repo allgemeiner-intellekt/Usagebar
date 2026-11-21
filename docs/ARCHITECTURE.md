@@ -25,9 +25,10 @@ flowchart LR
 
 | Component | Responsibility |
 | --- | --- |
-| `JustaUsageBarApp` | SwiftUI entry point and settings scene. |
-| `AppDelegate` | Creates a square `NSStatusItem` with a fixed template symbol, the usage panel and settings menu, panel provider marks, and release checks. |
-| `UsagePanelView` | The panel either mouse button opens: one card per provider with its mark, plan, meters, and reset times. Another click, an outside click, or Escape closes it; the ⋯ button opens the settings menu. Cards have no menu-bar selection action. |
+| `JustaUsageBarApp` | SwiftUI entry point and `⌘,` settings command routing. |
+| `AppDelegate` | Creates a square `NSStatusItem` with a fixed template symbol, the usage panel, the unified settings window, panel provider marks, and release checks. |
+| `UsagePanelView` | The panel either mouse button opens: one card per provider with its mark, plan, meters, and reset times. Another click, an outside click, or Escape closes it; the gear button or `⌘,` opens the unified Settings window, `⌘R` refreshes, and `⌘Q` quits. Cards have no menu-bar selection action. |
+| `SettingsView` | Unified macOS sidebar Settings window (`General`, `Providers`, `Data Source`, `About`) hosting Launch at Login, Refresh Interval, provider visibility, Antigravity pool filters, Direct credential setup sheets, CPA configuration, and build/repository links. |
 | `UsageViewModel` | UI state, cached credential availability, per-provider refresh scheduling, power-state handling, and launch at login. |
 | `ProviderActor` | Serializes provider and credential storage work away from the UI actor. |
 | `UsageRefreshPolicy` | Provider selection, refresh cadence, retry deadlines, and Retry-After parsing. |
@@ -45,12 +46,12 @@ flowchart LR
 
 1. `UsageViewModel` discovers provider availability asynchronously on `ProviderActor` and publishes an in-memory snapshot for UI decisions. It repeats discovery on every manual refresh, and otherwise no more often than hidden readings refresh.
 2. Enabled providers refresh concurrently on launch. If external preference edits turn every display switch off, the first authenticated provider in display order remains a refresh fallback.
-3. One owned refresh task and one one-shot timer schedule the next due work. The normal interval is two minutes; Low Power Mode raises it to at least five minutes. Timers have 10% tolerance. That interval applies while the usage panel or its settings menu is open. With both closed, every enabled provider refreshes five times less often, normally every ten minutes. Opening the panel immediately checks the shorter cadence and refreshes stale providers while cached values remain visible. Reopening fresh data does not duplicate requests, and retries still respect backoff and server cooldowns.
+3. One owned refresh task and one one-shot timer schedule the next due work. The base refresh interval defaults to two minutes (configurable in Settings → General across 1m, 2m, 5m, and 10m and persisted in `UserDefaults`); Low Power Mode raises it to at least five minutes. Timers have 10% tolerance. That interval applies while the usage panel or settings window is open. With both closed, every enabled provider refreshes five times less often (normally every ten minutes). Opening the panel immediately checks the shorter cadence and refreshes stale providers while cached values remain visible. Reopening fresh data does not duplicate requests, and retries still respect backoff and server cooldowns.
 4. Each provider tracks its last attempt, last successful update, and retry deadline. Failures back off from the normal interval up to 30 minutes. HTTP `Retry-After` deadlines are honored even for manual refreshes. A success clears the failure delay.
 5. Display or system sleep cancels pending requests and stops timers. Cancellation preserves credentials and previous readings. Wake refreshes only stale providers.
-6. A provider re-enabled in Display refreshes immediately unless a server cooldown is still active. Manual Refresh bypasses local delay and rediscovers credentials.
+6. A provider re-enabled in Settings → Providers refreshes immediately unless a server cooldown is still active. Manual Refresh bypasses local delay and rediscovers credentials.
 7. `AppDelegate` assigns the fixed `chart.bar` system symbol once as a template image. AppKit handles menu-bar tint and display scale; usage, errors, setup, and update state do not change the symbol or status-item width. Normalized usage and credential snapshots populate the panel only.
-8. The usage panel and the settings menu are built when they open, so reset countdowns and per-provider Last Updates labels are current without a UI timer. An open menu updates when usage or settings change.
+8. The usage panel is built when it opens, and the Settings window observes `UsageViewModel` directly, so reset countdowns and per-provider freshness labels stay current without a UI timer.
 
 UI state and drawing remain main-actor isolated. Provider services and encrypted credential storage share `ProviderActor`, a separate serial executor. Network awaits permit requests to overlap while keeping credential mutation serialized. No provider service is called by a drawing or provider-availability getter.
 
@@ -110,7 +111,7 @@ Claude banked resets are read only through the CPA source. The read uses the `ce
 
 | Data | Storage |
 | --- | --- |
-| Display preferences | `UserDefaults` through `@AppStorage` |
+| Display & refresh preferences | `UserDefaults` (`@AppStorage` and `refreshInterval` / `hiddenAntigravityPoolIDs`) |
 | Launch at login | `SMAppService.mainApp` |
 | Claude browser-session data, OAuth mirror, and optional Kimi credential | `~/Library/Application Support/JustaUsageBar/credentials.enc` |
 | Provider CLI credentials | Provider-owned files or Keychain items; Kimi OAuth tokens may be refreshed in place, while other provider credentials are read only |

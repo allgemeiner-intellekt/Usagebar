@@ -16,9 +16,11 @@ extension UsageViewModel {
 extension AppDelegate {
     fileprivate func verifyRendering(output: URL?) throws {
         setupStatusItem()
-        setupMenu()
+        settingsNavigation.loadCPAConnection = { nil }
+        settingsNavigation.loadClaudeCredentials = { ("", "") }
         defer {
             panel.close()
+            settingsWindow?.close()
             NSStatusBar.system.removeStatusItem(statusItem)
         }
         viewModel.stopAutoRefresh()
@@ -42,22 +44,6 @@ extension AppDelegate {
 
         for providers: Set<DisplayProvider> in [[], [.claude], [.codex], [.claude, .codex]] {
             viewModel.useRenderingFixtures(providers)
-            menuWillOpen(menu)
-            if providers.isEmpty {
-                precondition(menu.items.contains { $0.title == "Setup Usage Tracking" })
-            } else {
-                precondition(menu.items.contains { $0.title == "Refresh" })
-                let updates = menu.items.first { $0.title == "Last Updates" }?.submenu
-                precondition(updates?.numberOfItems == providers.count)
-                let display = menu.items.first { $0.title == "Display" }!.submenu!
-                precondition(display.numberOfItems == providers.count, "Display must contain only provider switches")
-                precondition(display.items.allSatisfy { $0.title == "Show Claude" || $0.title == "Show Codex" })
-                precondition(!menu.items.contains { $0.title == "Show Icon" }, "Fixed icon can still be hidden")
-            }
-            menuDidClose(menu)
-            let firstItem = menu.items.first
-            rebuildMenu()
-            precondition(menu.items.first === firstItem, "Closed menu rebuilt")
 
             // Exercise the real button target/action, including setup and multi-provider states.
             button.performClick(nil)
@@ -72,30 +58,72 @@ extension AppDelegate {
         }
 
         viewModel.useRenderingFixtures([.claude, .codex])
-        // Closing the settings menu must keep the visible panel at the on-screen cadence.
+        // Opening Settings from the panel (gear icon or Cmd+,) closes the panel,
+        // presents the unified Settings window, and keeps the visible cadence until closed.
         button.performClick(nil)
-        menuWillOpen(menu)
-        menuDidClose(menu)
-        precondition(isPanelOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval)
-        panel.close()
-        precondition(!isPanelOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5)
+        precondition(isPanelOpen && panel.isVisible)
+        panel.onOpenSettings()
+        precondition(!isPanelOpen && !panel.isVisible, "Opening Settings did not close the panel")
+        precondition(isSettingsOpen && settingsWindow?.isVisible == true, "Settings window did not open")
+        precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval,
+                     "Open Settings window did not preserve visible refresh cadence")
+
+        showSettings(section: .dataSource)
+        precondition(settingsNavigation.selectedSection == .dataSource, "Deep-linking to Data Source failed")
+        showSettings(section: .providers, setupSheet: .kimi)
+        precondition(settingsNavigation.selectedSection == .providers && settingsNavigation.activeSetupSheet == .kimi,
+                     "Deep-linking to Providers setup sheet failed")
+        settingsNavigation.activeSetupSheet = nil
+
+        // Render every Settings section in both light and dark appearances without credential I/O.
+        for section in SettingsSection.allCases {
+            settingsNavigation.selectedSection = section
+            for scheme: ColorScheme in [.light, .dark] {
+                let host = NSHostingView(
+                    rootView: SettingsView(viewModel: viewModel, navigation: settingsNavigation)
+                        .frame(width: 660, height: 480)
+                        .environment(\.colorScheme, scheme)
+                )
+                host.setFrameSize(NSSize(width: 660, height: 480))
+                host.layoutSubtreeIfNeeded()
+                precondition(host.bounds.width >= 580 && host.bounds.height >= 400,
+                             "Settings section \(section.rawValue) failed to lay out")
+            }
+        }
+        settingsNavigation.selectedSection = .general
+
+        if let window = settingsWindow {
+            windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification, object: window))
+            precondition(!isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5,
+                         "Minimizing Settings did not restore hidden refresh cadence")
+            windowDidDeminiaturize(Notification(name: NSWindow.didDeminiaturizeNotification, object: window))
+            precondition(isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval,
+                         "Restoring Settings did not resume visible refresh cadence")
+        }
+
+        settingsWindow?.close()
+        precondition(!isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5,
+                     "Closing Settings did not restore hidden refresh cadence")
 
         viewModel.usageData.fiveHourUsed = 99
         viewModel.codexUsageData.primaryUsedPercent = 100
         availableUpdateVersion = "99.0"
         usageDataChanged()
+        precondition(settingsNavigation.availableUpdateVersion == "99.0",
+                     "Settings navigation did not sync available update version")
         precondition(button.image === icon && statusItem.length == NSStatusItem.squareLength,
                      "Usage, errors, or updates changed the fixed icon")
         availableUpdateVersion = nil
         viewModel.usageData.fiveHourUsed = 23
         viewModel.codexUsageData.primaryUsedPercent = 34
 
-        // Keep the last authenticated provider enabled when using the Display switches.
-        toggleShowClaude()
+        // Keep the last authenticated provider enabled when using the Provider switches.
+        viewModel.setProviderShown(false, for: .claude)
         precondition(!viewModel.showClaude && viewModel.showCodex)
-        toggleShowCodex()
-        precondition(viewModel.showCodex, "Display switches hid every authenticated provider")
-        viewModel.showClaude = true
+        precondition(viewModel.isLastVisibleAvailableProvider(.codex), "Last visible provider was not flagged")
+        viewModel.setProviderShown(false, for: .codex)
+        precondition(viewModel.showCodex, "Provider switches hid every authenticated provider")
+        viewModel.setProviderShown(true, for: .claude)
 
         let expiry = ISO8601Timestamp.date(from: "2026-11-06T15:59:00Z")!
         let later = ISO8601Timestamp.date(from: "2026-11-30T15:59:00Z")!
@@ -233,7 +261,7 @@ struct StatusRenderingTests {
         let delegate = AppDelegate(viewModel: model)
         try delegate.verifyRendering(output: output)
         delegate.verifyCPARendering()
-        print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, provider switches, closed-menu reuse, visibility cadence")
+        print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, unified settings window, provider switches, visibility cadence")
     }
 }
 
@@ -312,24 +340,21 @@ extension AppDelegate {
         precondition(agCard.detail == "Pro" && agCard.poolGroups.count == 2 && !agCard.allPoolsHidden, "Single Antigravity card lost pools or plan")
         precondition(agCard.poolGroups[1].rows[0].dimmed, "Weekly-exhausted 5h row must be dimmed")
 
-        // Verify ⋯ Settings menu exposes Antigravity Pools submenu and toggles update panel cards.
-        menuWillOpen(menu)
-        let poolsSubmenu = menu.items.first { $0.title == "Antigravity Pools" }?.submenu
-        precondition(poolsSubmenu != nil, "Missing Antigravity Pools submenu in CPA mode")
-        let geminiItem = poolsSubmenu?.items.first { $0.title == "Gemini Models" }
-        let claudePoolItem = poolsSubmenu?.items.first { $0.title == "Claude and GPT models" }
-        precondition(geminiItem?.state == .on && claudePoolItem?.state == .on, "Pools should be checked by default")
-        menuDidClose(menu)
+        // Verify Antigravity pool discovery and toggles update panel cards.
+        precondition(viewModel.discoveredAntigravityPools.map(\.id) == ["gemini-models", "claude-and-gpt-models"],
+                     "Missing discovered Antigravity pools in CPA mode")
+        precondition(viewModel.isAntigravityPoolVisible("gemini-models") && viewModel.isAntigravityPoolVisible("claude-and-gpt-models"),
+                     "Pools should be visible by default")
 
-        toggleAntigravityPool(geminiItem!)
+        viewModel.toggleAntigravityPool("gemini-models")
         let filteredCard = panelCards().first { $0.provider == .antigravity }!
         precondition(filteredCard.poolGroups.map(\.id) == ["claude-and-gpt-models"] && !filteredCard.allPoolsHidden, "Hiding one pool failed")
 
-        toggleAntigravityPool(claudePoolItem!)
+        viewModel.toggleAntigravityPool("claude-and-gpt-models")
         let hiddenAllCard = panelCards().first { $0.provider == .antigravity }!
         precondition(hiddenAllCard.poolGroups.isEmpty && hiddenAllCard.allPoolsHidden, "All-pools-hidden state not reflected")
 
-        showAllAntigravityPools()
+        viewModel.showAllAntigravityPools()
         viewModel.useCPAAccountFixtures([agAccount1, agAccount2])
         updatePanel()
         let multiAG = panelCards().first { $0.provider == .antigravity }!

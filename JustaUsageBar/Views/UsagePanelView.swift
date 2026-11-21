@@ -73,7 +73,7 @@ final class UsagePanelModel: ObservableObject {
     var onResize: () -> Void = {}
     var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
-    var onMore: (NSView) -> Void = { _ in }
+    var onSettings: () -> Void = {}
     var onUpdate: () -> Void = {}
     var onSetup: () -> Void = {}
     var onSetUpKimi: () -> Void = {}
@@ -189,7 +189,9 @@ struct UsagePanelView: View {
                 }
             }
             Spacer(minLength: 0)
-            MoreButton(model: model)
+            PanelIconButton(systemName: "gearshape", help: "Settings (⌘,)") {
+                model.onSettings()
+            }
             PanelTextButton(title: "Quit") { model.onQuit() }
         }
         .padding(.horizontal, 4)
@@ -572,32 +574,6 @@ private struct PanelTextButton: View {
     }
 }
 
-/// Opens the settings menu (Display, Launch at Login, sign-out, updates) under itself.
-private struct MoreButton: View {
-    @ObservedObject var model: UsagePanelModel
-    @State private var anchor: NSView?
-
-    var body: some View {
-        PanelIconButton(systemName: "ellipsis", help: "Settings") {
-            if let anchor { model.onMore(anchor) }
-        }
-        .background(AnchorView(view: $anchor))
-    }
-}
-
-/// Exposes the AppKit view behind a SwiftUI view, to anchor an `NSMenu` popup.
-private struct AnchorView: NSViewRepresentable {
-    @Binding var view: NSView?
-
-    func makeNSView(context: Context) -> NSView {
-        let nsView = NSView()
-        DispatchQueue.main.async { view = nsView }
-        return nsView
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
 extension NSColor {
     /// Claude's orange from its spark mark, #D97757.
     static let usagebarClaudeOrange = NSColor(red: 0.851, green: 0.467, blue: 0.341, alpha: 1)
@@ -662,6 +638,9 @@ final class UsagePanel: NSPanel {
     private var outsideClickMonitor: Any?
     private var keyMonitor: Any?
     var onClose: () -> Void = {}
+    var onOpenSettings: () -> Void = {}
+    var onRefresh: () -> Void = {}
+    var onQuit: () -> Void = {}
 
     init(rootView: UsagePanelView) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -736,9 +715,28 @@ final class UsagePanel: NSPanel {
             self?.close()
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, self?.isKeyWindow == true else { return event }
-            self?.close()
-            return nil
+            guard let self, self.isKeyWindow else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if event.keyCode == 53 && flags.isEmpty {
+                self.close()
+                return nil
+            }
+            if flags == .command {
+                switch event.charactersIgnoringModifiers?.lowercased() {
+                case ",":
+                    self.onOpenSettings()
+                    return nil
+                case "r":
+                    self.onRefresh()
+                    return nil
+                case "q":
+                    self.onQuit()
+                    return nil
+                default:
+                    break
+                }
+            }
+            return event
         }
     }
 

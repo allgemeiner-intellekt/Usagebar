@@ -179,6 +179,18 @@ struct PerformanceRegressionTests {
         model.showCodex = false
         model.showKimi = false
         check(model.refreshTargets == [.claude], "All-hidden fallback disappeared")
+
+        // Verify persisted refreshInterval clamping and reload.
+        check(model.refreshInterval == 120, "Default refresh interval changed")
+        model.updateRefreshInterval(10)
+        check(model.refreshInterval == 30, "Refresh interval below lower bound was not clamped")
+        model.updateRefreshInterval(999)
+        check(model.refreshInterval == 600, "Refresh interval above upper bound was not clamped")
+        model.updateRefreshInterval(300)
+        let reloadedIntervalModel = UsageViewModel(startAutomatically: false)
+        defer { reloadedIntervalModel.stopAutoRefresh() }
+        check(reloadedIntervalModel.refreshInterval == 300, "Persisted refresh interval did not reload")
+        model.updateRefreshInterval(UsageViewModel.defaultRefreshInterval)
     }
 
     /// Drive the real visibility/scheduler path with old cache entries and fake providers.

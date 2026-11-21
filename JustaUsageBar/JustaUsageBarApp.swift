@@ -11,7 +11,15 @@ struct JustaUsageBarApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView(viewModel: UsageViewModel.shared)
+            EmptyView()
+        }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    appDelegate.showSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 }

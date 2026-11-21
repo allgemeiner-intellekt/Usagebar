@@ -55,10 +55,19 @@ final class UsageViewModel: ObservableObject {
 
     // MARK: - General
 
+    nonisolated static let defaultRefreshInterval: TimeInterval = 120
+    nonisolated static let supportedRefreshIntervals: [TimeInterval] = [60, 120, 300, 600]
+    nonisolated private static let refreshIntervalDefaultsKey = "refreshInterval"
+
     @Published var isLoading: Bool = false
     @Published var error: String?
     @Published var lastUpdated: Date?
-    @Published var refreshInterval: TimeInterval = 120
+    @Published var refreshInterval: TimeInterval = {
+        if let saved = UserDefaults.standard.object(forKey: "refreshInterval") as? Double {
+            return max(30, min(600, saved))
+        }
+        return 120
+    }()
 
     // MARK: - Display Settings (persisted)
 
@@ -85,6 +94,7 @@ final class UsageViewModel: ObservableObject {
             return false
         }
         set {
+            objectWillChange.send()
             if #available(macOS 13.0, *) {
                 do {
                     if newValue {
@@ -138,23 +148,62 @@ final class UsageViewModel: ObservableObject {
         UsageRefreshPolicy.interval(base: refreshInterval, lowPower: lowPowerMode)
     }
 
-    /// Only the panel and its settings menu show usage; the status icon is fixed.
+    /// Only the panel and settings window show usage; the status icon is fixed.
     var scheduledRefreshInterval: TimeInterval {
         UsageRefreshPolicy.interval(base: effectiveRefreshInterval, visible: isUsageVisible)
     }
 
+    func isProviderShown(_ provider: DisplayProvider) -> Bool {
+        switch provider {
+        case .claude: showClaude
+        case .codex: showCodex
+        case .antigravity: showAntigravity
+        case .cursor: showCursor
+        case .kimi: showKimi
+        case .zai: showZai
+        case .xai: showXai
+        }
+    }
+
+    var hasAnyShownAvailableProvider: Bool {
+        DisplayProvider.displayOrder.contains { provider in
+            isProviderShown(provider) && availableProviders.contains(provider)
+        }
+    }
+
+    /// True when turning off `provider` would hide the last authenticated/available provider.
+    func isLastVisibleAvailableProvider(_ provider: DisplayProvider) -> Bool {
+        guard isProviderShown(provider), availableProviders.contains(provider) else { return false }
+        return !DisplayProvider.displayOrder.contains { other in
+            other != provider && isProviderShown(other) && availableProviders.contains(other)
+        }
+    }
+
+    /// Updates a provider's visibility switch while ensuring at least one
+    /// available provider remains shown.
+    func setProviderShown(_ shown: Bool, for provider: DisplayProvider) {
+        objectWillChange.send()
+        assignProviderShown(shown, for: provider)
+        if !shown, !availableProviders.isEmpty, !hasAnyShownAvailableProvider {
+            assignProviderShown(true, for: provider)
+        }
+        NotificationCenter.default.post(name: NSNotification.Name("SettingsChanged"), object: nil)
+    }
+
+    private func assignProviderShown(_ shown: Bool, for provider: DisplayProvider) {
+        switch provider {
+        case .claude: showClaude = shown
+        case .codex: showCodex = shown
+        case .antigravity: showAntigravity = shown
+        case .cursor: showCursor = shown
+        case .kimi: showKimi = shown
+        case .zai: showZai = shown
+        case .xai: showXai = shown
+        }
+    }
+
     private var enabledProviders: Set<DisplayProvider> {
-        Set(DisplayProvider.displayOrder.filter {
-            switch $0 {
-            case .claude: return showClaude
-            case .codex: return showCodex
-            case .antigravity: return showAntigravity
-            case .cursor: return showCursor
-            case .kimi: return showKimi
-            case .zai: return showZai
-            case .xai: return showXai
-            }
-        })
+        Set(DisplayProvider.displayOrder.filter { isProviderShown($0) })
     }
 
     var refreshTargets: Set<DisplayProvider> {
@@ -456,7 +505,9 @@ final class UsageViewModel: ObservableObject {
     }
 
     func updateRefreshInterval(_ interval: TimeInterval) {
-        refreshInterval = max(30, min(600, interval))
+        let clamped = max(30, min(600, interval))
+        refreshInterval = clamped
+        UserDefaults.standard.set(clamped, forKey: Self.refreshIntervalDefaultsKey)
         scheduleNextRefresh()
     }
 
@@ -595,7 +646,7 @@ final class UsageViewModel: ObservableObject {
         }
         guard !Task.isCancelled, generation == sourceGeneration else { return }
         guard let client = cpaClient else {
-            cpaError = "Configure a CPA connection in Data source settings."
+            cpaError = "Configure a CPA connection in Settings → Data Source."
             discoveryState.lastAttempt = Date()
             return
         }

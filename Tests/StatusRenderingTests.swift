@@ -92,6 +92,15 @@ extension AppDelegate {
         }
         settingsNavigation.selectedSection = .general
 
+        if let window = settingsWindow {
+            windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification, object: window))
+            precondition(!isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5,
+                         "Minimizing Settings did not restore hidden refresh cadence")
+            windowDidDeminiaturize(Notification(name: NSWindow.didDeminiaturizeNotification, object: window))
+            precondition(isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval,
+                         "Restoring Settings did not resume visible refresh cadence")
+        }
+
         settingsWindow?.close()
         precondition(!isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5,
                      "Closing Settings did not restore hidden refresh cadence")

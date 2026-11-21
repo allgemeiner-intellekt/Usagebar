@@ -412,12 +412,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         isSettingsOpen = true
         NSApp.activate(ignoringOtherApps: true)
+        if settingsWindow?.isMiniaturized == true {
+            settingsWindow?.deminiaturize(nil)
+        }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
         isSettingsOpen = false
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        isSettingsOpen = false
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        isSettingsOpen = true
     }
 
     @objc private func refreshData() {

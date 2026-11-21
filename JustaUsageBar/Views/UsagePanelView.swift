@@ -638,6 +638,7 @@ final class UsagePanel: NSPanel {
     private var outsideClickMonitor: Any?
     private var keyMonitor: Any?
     var onClose: () -> Void = {}
+    var onOutsideClick: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}
@@ -712,6 +713,7 @@ final class UsagePanel: NSPanel {
     private func startMonitoring() {
         stopMonitoring()
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.onOutsideClick()
             self?.close()
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in

@@ -85,6 +85,13 @@ final class UsageViewModel: ObservableObject {
         UserDefaults.standard.stringArray(forKey: "hiddenAntigravityPoolIDs") ?? []
     )
 
+    @Published private(set) var globalHotkey: GlobalHotkey? = GlobalHotkey.load(from: .standard)
+
+    func setGlobalHotkey(_ hotkey: GlobalHotkey?) {
+        globalHotkey = hotkey
+        GlobalHotkey.save(hotkey, to: .standard)
+    }
+
     // Launch at login using SMAppService (macOS 13+)
     var launchAtStartup: Bool {
         get {

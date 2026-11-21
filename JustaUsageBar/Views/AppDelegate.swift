@@ -20,10 +20,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var statusItem: NSStatusItem!
     private let panelModel = UsagePanelModel()
+    private let globalHotkeyManager = GlobalHotkeyManager()
+    private var previousAppBeforeHotkeyPanel: NSRunningApplication?
     private lazy var panel: UsagePanel = {
         let panel = UsagePanel(rootView: UsagePanelView(model: panelModel))
-        panel.onClose = { [weak self] in self?.isPanelOpen = false }
-        panel.onOpenSettings = { [weak self] in self?.showSettings() }
+        panel.onClose = { [weak self] in
+            guard let self else { return }
+            self.isPanelOpen = false
+            if let previousApp = self.previousAppBeforeHotkeyPanel {
+                self.previousAppBeforeHotkeyPanel = nil
+                previousApp.activate()
+            }
+        }
+        panel.onOutsideClick = { [weak self] in
+            self?.previousAppBeforeHotkeyPanel = nil
+        }
+        panel.onOpenSettings = { [weak self] in
+            self?.previousAppBeforeHotkeyPanel = nil
+            self?.showSettings()
+        }
         panel.onRefresh = { [weak self] in
             self?.panelModel.isRefreshing = true
             self?.refreshData()
@@ -69,11 +84,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         setupStatusItem()
         configureSettingsNavigation()
+        setupGlobalHotkey()
         observeChanges()
         recordInstalledAppVersionIfNeeded()
 
         NSApp.setActivationPolicy(.accessory)
         presentPendingUpdateFailureIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        globalHotkeyManager.unregister()
+    }
+
+    private func setupGlobalHotkey() {
+        globalHotkeyManager.onTrigger = { [weak self] in
+            self?.togglePanel(activatedByHotkey: true)
+        }
+        if let saved = viewModel.globalHotkey {
+            if globalHotkeyManager.register(saved) {
+                settingsNavigation.globalHotkeyError = nil
+            } else {
+                settingsNavigation.globalHotkeyError = "Could not register \(saved.displayString). It may already be in use."
+            }
+        }
+    }
+
+    private func applyGlobalHotkey(_ hotkey: GlobalHotkey?) {
+        guard let hotkey else {
+            globalHotkeyManager.unregister()
+            viewModel.setGlobalHotkey(nil)
+            settingsNavigation.globalHotkeyError = nil
+            return
+        }
+
+        if let validationError = hotkey.validate() {
+            settingsNavigation.globalHotkeyError = validationError.localizedDescription
+            if let existing = viewModel.globalHotkey {
+                _ = globalHotkeyManager.register(existing)
+            }
+            return
+        }
+
+        if globalHotkeyManager.register(hotkey) {
+            viewModel.setGlobalHotkey(hotkey)
+            settingsNavigation.globalHotkeyError = nil
+        } else {
+            if let existing = viewModel.globalHotkey {
+                _ = globalHotkeyManager.register(existing)
+            }
+            settingsNavigation.globalHotkeyError = "Could not register \(hotkey.displayString). It may already be in use."
+        }
     }
 
     private func observeChanges() {
@@ -167,12 +227,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Usage Panel
 
-    private func togglePanel() {
+    private func togglePanel(activatedByHotkey: Bool = false) {
         if panel.isVisible {
             panel.close()
             return
         }
         guard let button = statusItem.button else { return }
+        if activatedByHotkey {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            previousAppBeforeHotkeyPanel = (frontmost != NSRunningApplication.current) ? frontmost : nil
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            previousAppBeforeHotkeyPanel = nil
+        }
         configurePanelActions()
         isPanelOpen = true
         updatePanel()
@@ -376,6 +443,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsNavigation.onRefresh = { [weak self] in self?.refreshData() }
         settingsNavigation.onOpenGitHub = { [weak self] in self?.openGitHubRepository() }
         settingsNavigation.onCheckForUpdates = { [weak self] in self?.checkForUpdates() }
+        settingsNavigation.onGlobalHotkeyChange = { [weak self] hotkey in self?.applyGlobalHotkey(hotkey) }
+        settingsNavigation.onGlobalHotkeyRecordingChanged = { [weak self] recording in
+            self?.globalHotkeyManager.setSuspended(recording)
+        }
     }
 
     @objc private func statusBarButtonClicked() {
@@ -383,6 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showSettings(section: SettingsSection? = nil, setupSheet: ProviderSetupSheet? = nil) {
+        previousAppBeforeHotkeyPanel = nil
         if panel.isVisible {
             panel.close()
         }

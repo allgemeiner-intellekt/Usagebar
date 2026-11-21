@@ -49,10 +49,13 @@ final class SettingsNavigationModel: ObservableObject {
     @Published var availableUpdateVersion: String?
     @Published var installedVersion: String = ""
     @Published var installedBuild: String = ""
+    @Published var globalHotkeyError: String?
 
     var onRefresh: () -> Void = {}
     var onOpenGitHub: () -> Void = {}
     var onCheckForUpdates: () -> Void = {}
+    var onGlobalHotkeyChange: (GlobalHotkey?) -> Void = { _ in }
+    var onGlobalHotkeyRecordingChanged: (Bool) -> Void = { _ in }
     var loadCPAConnection: () async -> CPAConnection? = { await CredentialStorage.shared.cpaConnection }
     var loadClaudeCredentials: () async -> (sessionKey: String, organizationId: String) = {
         let sessionKey = await CredentialStorage.shared.sessionKey ?? ""
@@ -136,6 +139,7 @@ struct SettingsView: View {
 private struct GeneralSettingsPane: View {
     @ObservedObject var viewModel: UsageViewModel
     @ObservedObject var navigation: SettingsNavigationModel
+    @State private var shortcutValidationError: String?
 
     private var refreshOptions: [TimeInterval] {
         var values = UsageViewModel.supportedRefreshIntervals
@@ -159,6 +163,47 @@ private struct GeneralSettingsPane: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+
+            Section {
+                LabeledContent {
+                    GlobalHotkeyRecorderView(
+                        hotkey: viewModel.globalHotkey,
+                        onChange: { hotkey in
+                            shortcutValidationError = nil
+                            navigation.onGlobalHotkeyChange(hotkey)
+                        },
+                        onValidationError: { message in
+                            shortcutValidationError = message
+                        },
+                        onRecordingChange: { recording in
+                            if recording {
+                                shortcutValidationError = nil
+                                navigation.globalHotkeyError = nil
+                            }
+                            navigation.onGlobalHotkeyRecordingChanged(recording)
+                        }
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Toggle Panel")
+                        Text("Open or close the Usagebar panel from any app.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Keyboard Shortcut")
+            } footer: {
+                if let error = shortcutValidationError ?? navigation.globalHotkeyError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Requires at least one modifier key (⌘, ⌃, or ⌥). Works without Accessibility permission.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -238,6 +283,136 @@ private struct GeneralSettingsPane: View {
             return minutes == 1 ? "1 minute" : "\(minutes) minutes"
         }
         return "\(rounded) seconds"
+    }
+}
+
+private struct GlobalHotkeyRecorderView: View {
+    let hotkey: GlobalHotkey?
+    let onChange: (GlobalHotkey?) -> Void
+    let onValidationError: (String?) -> Void
+    let onRecordingChange: (Bool) -> Void
+
+    @State private var isRecording = false
+    @State private var pendingModifiers: GlobalHotkey.Modifiers = []
+    @State private var eventMonitor: Any?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                if isRecording {
+                    stopRecording()
+                } else {
+                    startRecording()
+                }
+            } label: {
+                Text(buttonLabel)
+                    .font(hotkey != nil && !isRecording ? .system(size: 12, weight: .medium, design: .rounded) : .system(size: 12))
+                    .foregroundStyle(isRecording ? Color.accentColor : (hotkey != nil ? Color.primary : Color.secondary))
+                    .frame(minWidth: 118)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(isRecording ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(isRecording ? Color.accentColor : Color.primary.opacity(0.16), lineWidth: isRecording ? 1.5 : 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(isRecording ? "Press a shortcut, Escape to cancel, or Delete to clear" : "Click to record a global shortcut")
+
+            if hotkey != nil && !isRecording {
+                Button {
+                    onValidationError(nil)
+                    onChange(nil)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear shortcut")
+                .accessibilityLabel("Clear shortcut")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            if isRecording {
+                stopRecording()
+            }
+        }
+        .onDisappear {
+            if isRecording {
+                stopRecording()
+            }
+        }
+    }
+
+    private var buttonLabel: String {
+        if isRecording {
+            let mods = pendingModifiers.displayString
+            return mods.isEmpty ? "Type shortcut…" : "\(mods)…"
+        }
+        return hotkey?.displayString ?? "Record Shortcut"
+    }
+
+    private func startRecording() {
+        isRecording = true
+        pendingModifiers = []
+        onRecordingChange(true)
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            handleEvent(event)
+        }
+    }
+
+    private func stopRecording() {
+        isRecording = false
+        pendingModifiers = []
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        onRecordingChange(false)
+    }
+
+    private func handleEvent(_ event: NSEvent) -> NSEvent? {
+        guard isRecording else { return event }
+
+        if event.type == .flagsChanged {
+            pendingModifiers = GlobalHotkey.Modifiers(nsEventFlags: event.modifierFlags)
+            return nil
+        }
+
+        guard event.type == .keyDown else { return event }
+
+        let keyCode = UInt32(event.keyCode)
+        let modifiers = GlobalHotkey.Modifiers(nsEventFlags: event.modifierFlags)
+
+        if keyCode == GlobalHotkey.escapeKeyCode && modifiers.isEmpty {
+            onValidationError(nil)
+            stopRecording()
+            return nil
+        }
+
+        if (keyCode == GlobalHotkey.deleteKeyCode || keyCode == GlobalHotkey.forwardDeleteKeyCode) && modifiers.isEmpty {
+            onValidationError(nil)
+            stopRecording()
+            onChange(nil)
+            return nil
+        }
+
+        let candidate = GlobalHotkey(keyCode: keyCode, modifiers: modifiers)
+        if let error = candidate.validate() {
+            NSSound.beep()
+            onValidationError(error.localizedDescription)
+            return nil
+        }
+
+        onValidationError(nil)
+        stopRecording()
+        onChange(candidate)
+        return nil
     }
 }
 

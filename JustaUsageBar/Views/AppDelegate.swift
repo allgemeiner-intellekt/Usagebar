@@ -29,9 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.isPanelOpen = false
             if let previousApp = self.previousAppBeforeHotkeyPanel {
                 self.previousAppBeforeHotkeyPanel = nil
-                if self.settingsWindow?.isVisible != true {
-                    previousApp.activate()
-                }
+                previousApp.activate()
             }
         }
         panel.onOutsideClick = { [weak self] in
@@ -456,6 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showSettings(section: SettingsSection? = nil, setupSheet: ProviderSetupSheet? = nil) {
+        previousAppBeforeHotkeyPanel = nil
         if panel.isVisible {
             panel.close()
         }

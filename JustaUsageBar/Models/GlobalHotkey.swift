@@ -180,60 +180,53 @@ nonisolated struct GlobalHotkey: Equatable, Hashable, Codable, Sendable {
     ]
 
     static func keyLabel(for keyCode: UInt32) -> String {
-        if let known = keyLabels[keyCode] {
-            return known
+        if let special = specialKeyLabels[keyCode] {
+            return special
+        }
+        if let localized = layoutKeyLabel(for: keyCode) {
+            return localized
+        }
+        if let fallback = fallbackPrintableKeyLabels[keyCode] {
+            return fallback
         }
         return "Key \(keyCode)"
     }
 
-    private static let keyLabels: [UInt32: String] = [
-        UInt32(kVK_ANSI_A): "A",
-        UInt32(kVK_ANSI_B): "B",
-        UInt32(kVK_ANSI_C): "C",
-        UInt32(kVK_ANSI_D): "D",
-        UInt32(kVK_ANSI_E): "E",
-        UInt32(kVK_ANSI_F): "F",
-        UInt32(kVK_ANSI_G): "G",
-        UInt32(kVK_ANSI_H): "H",
-        UInt32(kVK_ANSI_I): "I",
-        UInt32(kVK_ANSI_J): "J",
-        UInt32(kVK_ANSI_K): "K",
-        UInt32(kVK_ANSI_L): "L",
-        UInt32(kVK_ANSI_M): "M",
-        UInt32(kVK_ANSI_N): "N",
-        UInt32(kVK_ANSI_O): "O",
-        UInt32(kVK_ANSI_P): "P",
-        UInt32(kVK_ANSI_Q): "Q",
-        UInt32(kVK_ANSI_R): "R",
-        UInt32(kVK_ANSI_S): "S",
-        UInt32(kVK_ANSI_T): "T",
-        UInt32(kVK_ANSI_U): "U",
-        UInt32(kVK_ANSI_V): "V",
-        UInt32(kVK_ANSI_W): "W",
-        UInt32(kVK_ANSI_X): "X",
-        UInt32(kVK_ANSI_Y): "Y",
-        UInt32(kVK_ANSI_Z): "Z",
-        UInt32(kVK_ANSI_0): "0",
-        UInt32(kVK_ANSI_1): "1",
-        UInt32(kVK_ANSI_2): "2",
-        UInt32(kVK_ANSI_3): "3",
-        UInt32(kVK_ANSI_4): "4",
-        UInt32(kVK_ANSI_5): "5",
-        UInt32(kVK_ANSI_6): "6",
-        UInt32(kVK_ANSI_7): "7",
-        UInt32(kVK_ANSI_8): "8",
-        UInt32(kVK_ANSI_9): "9",
-        UInt32(kVK_ANSI_Minus): "-",
-        UInt32(kVK_ANSI_Equal): "=",
-        UInt32(kVK_ANSI_LeftBracket): "[",
-        UInt32(kVK_ANSI_RightBracket): "]",
-        UInt32(kVK_ANSI_Backslash): "\\",
-        UInt32(kVK_ANSI_Semicolon): ";",
-        UInt32(kVK_ANSI_Quote): "'",
-        UInt32(kVK_ANSI_Comma): ",",
-        UInt32(kVK_ANSI_Period): ".",
-        UInt32(kVK_ANSI_Slash): "/",
-        UInt32(kVK_ANSI_Grave): "`",
+    private static func layoutKeyLabel(for keyCode: UInt32) -> String? {
+        guard Thread.isMainThread,
+              let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let rawLayoutData = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData) else {
+            return nil
+        }
+        let layoutData = Unmanaged<CFData>.fromOpaque(rawLayoutData).takeUnretainedValue() as Data
+        return layoutData.withUnsafeBytes { rawBuffer -> String? in
+            guard let layoutPtr = rawBuffer.bindMemory(to: UCKeyboardLayout.self).baseAddress else {
+                return nil
+            }
+            var deadKeyState: UInt32 = 0
+            var chars = [UniChar](repeating: 0, count: 4)
+            var length: Int = 0
+            let status = UCKeyTranslate(
+                layoutPtr,
+                UInt16(keyCode),
+                UInt16(kUCKeyActionDisplay),
+                0,
+                UInt32(LMGetKbdType()),
+                OptionBits(kUCKeyTranslateNoDeadKeysMask),
+                &deadKeyState,
+                chars.count,
+                &length,
+                &chars
+            )
+            guard status == noErr, length > 0 else { return nil }
+            let raw = String(utf16CodeUnits: chars, count: length)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return nil }
+            return raw.uppercased()
+        }
+    }
+
+    private static let specialKeyLabels: [UInt32: String] = [
         UInt32(kVK_Space): "Space",
         UInt32(kVK_Return): "↩",
         UInt32(kVK_Tab): "⇥",
@@ -286,5 +279,55 @@ nonisolated struct GlobalHotkey: Equatable, Hashable, Codable, Sendable {
         UInt32(kVK_ANSI_KeypadEnter): "Num ↩",
         UInt32(kVK_ANSI_KeypadMinus): "Num -",
         UInt32(kVK_ANSI_KeypadEquals): "Num =",
+    ]
+
+    private static let fallbackPrintableKeyLabels: [UInt32: String] = [
+        UInt32(kVK_ANSI_A): "A",
+        UInt32(kVK_ANSI_B): "B",
+        UInt32(kVK_ANSI_C): "C",
+        UInt32(kVK_ANSI_D): "D",
+        UInt32(kVK_ANSI_E): "E",
+        UInt32(kVK_ANSI_F): "F",
+        UInt32(kVK_ANSI_G): "G",
+        UInt32(kVK_ANSI_H): "H",
+        UInt32(kVK_ANSI_I): "I",
+        UInt32(kVK_ANSI_J): "J",
+        UInt32(kVK_ANSI_K): "K",
+        UInt32(kVK_ANSI_L): "L",
+        UInt32(kVK_ANSI_M): "M",
+        UInt32(kVK_ANSI_N): "N",
+        UInt32(kVK_ANSI_O): "O",
+        UInt32(kVK_ANSI_P): "P",
+        UInt32(kVK_ANSI_Q): "Q",
+        UInt32(kVK_ANSI_R): "R",
+        UInt32(kVK_ANSI_S): "S",
+        UInt32(kVK_ANSI_T): "T",
+        UInt32(kVK_ANSI_U): "U",
+        UInt32(kVK_ANSI_V): "V",
+        UInt32(kVK_ANSI_W): "W",
+        UInt32(kVK_ANSI_X): "X",
+        UInt32(kVK_ANSI_Y): "Y",
+        UInt32(kVK_ANSI_Z): "Z",
+        UInt32(kVK_ANSI_0): "0",
+        UInt32(kVK_ANSI_1): "1",
+        UInt32(kVK_ANSI_2): "2",
+        UInt32(kVK_ANSI_3): "3",
+        UInt32(kVK_ANSI_4): "4",
+        UInt32(kVK_ANSI_5): "5",
+        UInt32(kVK_ANSI_6): "6",
+        UInt32(kVK_ANSI_7): "7",
+        UInt32(kVK_ANSI_8): "8",
+        UInt32(kVK_ANSI_9): "9",
+        UInt32(kVK_ANSI_Minus): "-",
+        UInt32(kVK_ANSI_Equal): "=",
+        UInt32(kVK_ANSI_LeftBracket): "[",
+        UInt32(kVK_ANSI_RightBracket): "]",
+        UInt32(kVK_ANSI_Backslash): "\\",
+        UInt32(kVK_ANSI_Semicolon): ";",
+        UInt32(kVK_ANSI_Quote): "'",
+        UInt32(kVK_ANSI_Comma): ",",
+        UInt32(kVK_ANSI_Period): ".",
+        UInt32(kVK_ANSI_Slash): "/",
+        UInt32(kVK_ANSI_Grave): "`",
     ]
 }

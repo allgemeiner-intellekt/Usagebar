@@ -30,7 +30,7 @@ extension AppDelegate {
         viewModel.showKimi = false
         viewModel.showZai = false
         viewModel.showXai = false
-        viewModel.usageData = UsageData(fiveHourUsed: 23, weeklyUsed: 67)
+        viewModel.usageData = UsageData(fiveHourUsed: 23, weeklyUsed: 67, planName: "Max 20x")
         viewModel.codexUsageData = CodexUsageData(primaryUsedPercent: 34, secondaryUsedPercent: 72)
 
         let button = statusItem.button!
@@ -136,6 +136,8 @@ extension AppDelegate {
         let claudeCard = panelCards().first { $0.provider == .claude }!
         precondition(codexCard.bankedResets == inventory && codexCard.showsBankedResets)
         precondition(codexCard.rows.count == 1, "Weekly primary must not duplicate its secondary window")
+        precondition(codexCard.detail == "Pro 200", "Codex card must show OpenAI's plan name")
+        precondition(claudeCard.detail == "Max 20x", "Claude card must show its plan, not its auth source")
         func cardHeight(_ card: UsagePanelCard) -> CGFloat {
             let hosting = NSHostingView(rootView: UsagePanelCardView(card: card, model: panelModel).frame(width: 324))
             return hosting.fittingSize.height

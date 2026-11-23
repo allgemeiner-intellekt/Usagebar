@@ -79,6 +79,15 @@ extension PerformanceRegressionTests {
         check(reading.bankedResets?.availableCount == 1, "Missing reset inventory")
         check(reading.windows.first?.percent == 0, "Zero usage is valid data")
         check(reading.windows.first?.label == "5h", "Window was invented")
+        check(reading.plan == "Plus", "Codex plan_type was not mapped to its product name")
+        check(PlanNames.codex("prolite") == "Pro 100" && PlanNames.codex("pro") == "Pro 200"
+              && PlanNames.codex("promax") == "Pro 500" && PlanNames.codex("new_internal_plan").isEmpty,
+              "Codex plan names must match OpenAI's product names")
+        check(PlanNames.claude(subscriptionType: "max", rateLimitTier: "default_claude_max_20x") == "Max 20x"
+              && PlanNames.claude(subscriptionType: "max", rateLimitTier: "default_claude_max_5x") == "Max 5x"
+              && PlanNames.claude(subscriptionType: "pro", rateLimitTier: nil) == "Pro"
+              && PlanNames.claude(subscriptionType: nil, rateLimitTier: nil).isEmpty,
+              "Claude plan names must match Anthropic's product names")
         let requests = await CPAFixture.requests
         check(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key" }, "Missing management authentication")
         let outbound = try JSONSerialization.jsonObject(with: requests.last!.httpBody!) as! [String: Any]

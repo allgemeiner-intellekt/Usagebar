@@ -172,7 +172,7 @@ struct UsagePanelView: View {
                 .multilineTextAlignment(.center)
             HStack {
                 Button("Setup Usage Tracking") { model.onSetup() }
-                Button("Set Up KimiCode…") { model.onSetUpKimi() }
+                Button("Set Up Kimi Code…") { model.onSetUpKimi() }
             }
             .controlSize(.small)
         }
@@ -592,7 +592,7 @@ extension NSColor {
 }
 
 /// Panel card branding: mark asset, title and accent for icon and meters.
-/// Claude, Antigravity and KimiCode use their brand colors; the others are
+/// Claude, Antigravity and Kimi Code use their brand colors; the others are
 /// monochrome brands, so their accents are chosen to tell cards apart.
 extension DisplayProvider {
     var panelMarkName: String {
@@ -609,13 +609,13 @@ extension DisplayProvider {
 
     var panelTitle: String {
         switch self {
-        case .claude: "Claude"
+        case .claude: "Claude Code"
         case .codex: "Codex"
         case .antigravity: "Antigravity"
         case .cursor: "Cursor"
-        case .kimi: "KimiCode"
+        case .kimi: "Kimi Code"
         case .zai: "Z.ai"
-        case .xai: "XAI"
+        case .xai: "xAI"
         }
     }
 

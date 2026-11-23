@@ -306,13 +306,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var cards: [UsagePanelCard] = []
 
         if viewModel.showClaude {
-            let detail: String = switch viewModel.claudeAuthSource {
-            case .oauth: "via OAuth"
-            case .webSession: "via Browser"
-            case .none: ""
-            }
+            let usage = viewModel.usageData
+            let detail = usage.planName
             if viewModel.hasClaudeCredentials {
-                let usage = viewModel.usageData
                 var rows = [
                     UsagePanelRow(label: "5h", percent: usage.fiveHourUsed, resetText: usage.timeUntilFiveHourReset),
                     UsagePanelRow(label: "7d", percent: usage.weeklyUsed, resetText: usage.timeUntilWeeklyReset)
@@ -335,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if viewModel.showCodex {
             let codex = viewModel.codexUsageData
-            let detail = codex.planType != "unknown" ? codex.planType.capitalized : ""
+            let detail = PlanNames.codex(codex.planType)
             if viewModel.hasCodexCredentials {
                 var rows = [UsagePanelRow(
                     label: codex.primaryIsWeekly ? "7d" : codex.primaryWindowLabel,
@@ -379,8 +375,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             rows.append(UsagePanelRow(label: "7d", percent: kimi.weeklyUsedPercent, resetText: kimi.timeUntilWeeklyReset))
             let error = viewModel.kimiError
             cards.append(UsagePanelCard(
-                provider: .kimi, detail: viewModel.kimiAuthSource.displayName, rows: rows,
-                message: error, actionTitle: error != nil ? "KimiCode Setup…" : nil
+                provider: .kimi, detail: "", rows: rows,
+                message: error, actionTitle: error != nil ? "Kimi Code Setup…" : nil
             ))
         }
 

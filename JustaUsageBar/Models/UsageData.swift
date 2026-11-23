@@ -52,6 +52,9 @@ nonisolated struct UsageData {
     var weeklyLimit: Int = 100
     var weeklyResetAt: Date?
 
+    /// Subscription name shown beside the card title, e.g. "Max 20x"; empty when unknown.
+    var planName: String = ""
+
     // Fable weekly limit (only present on plans with Fable access)
     var fableUsed: Int?
     var fableResetAt: Date?

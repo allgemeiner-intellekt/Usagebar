@@ -639,6 +639,7 @@ final class CPAClient {
         var plan = root["plan_type"] as? String ?? ""
         switch provider {
         case .codex:
+            plan = PlanNames.codex(root["plan_type"] as? String)
             if let limits = root["rate_limit"] as? [String: Any] {
                 for key in ["primary_window", "secondary_window"] {
                     guard let entry = limits[key] as? [String: Any],

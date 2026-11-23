@@ -6,6 +6,7 @@
 //  and fetches weekly plus 5-hour coding usage directly from Kimi.
 //
 
+import CryptoKit
 import Foundation
 
 nonisolated enum KimiAuthSource: String {
@@ -103,8 +104,9 @@ final class KimiAPIService {
 
     private let codeUsageURL = URL(string: "https://api.kimi.com/coding/v1/usages")!
     private let codeProfileURL = URL(string: "https://api.kimi.com/coding/v1/me")!
-    private var cachedPlan: (name: String, fetchedAt: Date)?
-    private var planRetryAt: Date?
+    /// Keyed by the account behind the token, so switching accounts never shows another plan.
+    private var cachedPlan: (identity: String, name: String, fetchedAt: Date)?
+    private var planRetryAt: (identity: String, date: Date)?
     private let cliOAuthTokenURL = URL(string: "https://auth.kimi.com/api/oauth/token")!
     private let webUsageURL = URL(
         string: "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages"
@@ -573,25 +575,38 @@ final class KimiAPIService {
 
         let data = try await responseData(for: request)
         var usage = try parseCodeAPIUsage(data)
-        usage.planName = await planName(authorizedLike: request)
+        usage.planName = await planName(authorizedLike: request, identity: planIdentity(for: token))
         return usage
     }
 
     /// Best-effort plan read with the usage request's credentials. Plans rarely
     /// change, so a success is reused for hours and a failure keeps the last name.
-    private func planName(authorizedLike usageRequest: URLRequest) async -> String {
+    private func planName(authorizedLike usageRequest: URLRequest, identity: String) async -> String {
+        if cachedPlan?.identity != identity { cachedPlan = nil }
+        if planRetryAt?.identity != identity { planRetryAt = nil }
         if let cachedPlan, Date().timeIntervalSince(cachedPlan.fetchedAt) < 6 * 3600 { return cachedPlan.name }
-        if let planRetryAt, planRetryAt > Date() { return cachedPlan?.name ?? "" }
+        if let planRetryAt, planRetryAt.date > Date() { return cachedPlan?.name ?? "" }
         var request = usageRequest
         request.url = codeProfileURL
-        guard let data = try? await responseData(for: request) else {
-            planRetryAt = Date().addingTimeInterval(600)
+        do {
+            let name = CPAClient.parseKimiProfilePlan(try await responseData(for: request)) ?? ""
+            cachedPlan = (identity, name, Date())
+            planRetryAt = nil
+            return name
+        } catch {
+            // Honor the server's cooldown when it asks for longer than ours.
+            let local = Date().addingTimeInterval(600)
+            let server = (error as? KimiServiceError)?.retryAfter
+            planRetryAt = (identity, max(local, server ?? local))
             return cachedPlan?.name ?? ""
         }
-        let name = CPAClient.parseKimiProfilePlan(data) ?? ""
-        cachedPlan = (name, Date())
-        planRetryAt = nil
-        return name
+    }
+
+    /// The account's stable user ID for OAuth tokens, which rotate; a digest of
+    /// the credential otherwise. Never the raw secret.
+    private func planIdentity(for token: String) -> String {
+        if let subject = webIdentityHeaders(from: token)["x-traffic-id"] { return "sub:" + subject }
+        return "key:" + SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private func fetchWebUsage(token: String) async throws -> KimiUsageData {

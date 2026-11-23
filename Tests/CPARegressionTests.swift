@@ -125,8 +125,12 @@ extension PerformanceRegressionTests {
             let response: [String: Any]
             if let body = request.httpBody {
                 let call = try JSONSerialization.jsonObject(with: body) as! [String: Any]
-                precondition(call["url"] as? String == "https://api.kimi.ai/coding/v1/usages", "Kimi regional endpoint was lost")
-                response = ["status_code": 200, "body": "{\"usage\":{\"limit\":10,\"used\":2}}"]
+                if call["url"] as? String == "https://api.kimi.ai/coding/v1/me" {
+                    response = ["status_code": 200, "body": #"{"user_level":25,"user_level_name":"Allegretto"}"#]
+                } else {
+                    precondition(call["url"] as? String == "https://api.kimi.ai/coding/v1/usages", "Kimi regional endpoint was lost")
+                    response = ["status_code": 200, "body": "{\"usage\":{\"limit\":10,\"used\":2}}"]
+                }
             } else {
                 response = ["files": [["auth_index": "regional", "provider": "kimi-ai", "name": "regional"]]]
             }
@@ -135,6 +139,12 @@ extension PerformanceRegressionTests {
         let regionalAccounts = try await regional.accounts()
         let regionalReading = try await regional.usage(for: regionalAccounts[0])
         check(regionalReading.windows.first?.percent == 20, "Regional Kimi usage failed")
+        check(regionalReading.plan == "Allegretto", "CPA Kimi card lost its membership name")
+        check(CPAClient.parseKimiProfilePlan(Data(#"{"user_level_name":"  Allegretto\n"}"#.utf8)) == "Allegretto"
+              && CPAClient.parseKimiProfilePlan(Data(#"{"user_level":25}"#.utf8)) == nil, "Kimi plan parsing changed")
+        check(CPAClient.parseClaudeProfilePlan(Data(#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#.utf8)) == "Pro"
+              && CPAClient.parseClaudeProfilePlan(Data(#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}"#.utf8)) == "Max 5x"
+              && CPAClient.parseClaudeProfilePlan(Data("{}".utf8)) == nil, "Claude profile plan parsing changed")
 
         let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { CPAClient(connection: $0, send: CPAFixture.send) })
         vm.showCodex = true; vm.showKimi = true; vm.showXai = true
@@ -230,6 +240,7 @@ extension PerformanceRegressionTests {
 nonisolated final class ClaudeGrantFixture: @unchecked Sendable {
     var calls: [[String: Any]] = []
     var inventory: (Int, String) = (200, "")
+    var profileCalls = 0
 }
 
 nonisolated final class AntigravityFixture: @unchecked Sendable {
@@ -302,7 +313,10 @@ extension PerformanceRegressionTests {
                 let call = try JSONSerialization.jsonObject(with: body) as! [String: Any]
                 box.calls.append(call)
                 precondition(call["method"] as? String == "GET", "Reset grants must only be read")
-                if (call["url"] as? String)?.contains("cedar_ember") == true {
+                if call["url"] as? String == "https://api.anthropic.com/api/oauth/profile" {
+                    box.profileCalls += 1
+                    response = ["status_code": 200, "body": #"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#]
+                } else if (call["url"] as? String)?.contains("cedar_ember") == true {
                     response = ["status_code": box.inventory.0, "header": ["Retry-After": ["600"]], "body": box.inventory.1]
                 } else {
                     response = ["status_code": 200, "body": usage]
@@ -315,6 +329,7 @@ extension PerformanceRegressionTests {
         let account = try await client.accounts()[0]
         let reading = try await client.usage(for: account)
         check(reading.windows.map(\.percent) == [40, 10], "Reset grants changed Claude usage")
+        check(reading.plan == "Max 20x", "CPA Claude card lost its plan")
         check(reading.bankedResets?.grants?.first?.id == "nov", "CPA Claude reading lost reset grants")
         let call = box.calls.last!
         let headers = call["header"] as? [String: String] ?? [:]
@@ -332,6 +347,7 @@ extension PerformanceRegressionTests {
         let before = box.calls.count
         _ = try await client.usage(for: account)
         check(box.calls.count == before + 1, "Reset grants ignored server cooldown or blocked usage")
+        check(box.profileCalls == 1 && limited.plan == "Max 20x", "Claude plan must be cached across refreshes")
         var row = account
         row.reading = malformed
         check(row.resetInventoryUnavailable, "Multi-account rows must distinguish failed grant reads from zero")

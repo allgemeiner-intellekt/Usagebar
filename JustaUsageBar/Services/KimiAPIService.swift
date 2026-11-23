@@ -33,6 +33,8 @@ nonisolated struct KimiUsageData {
     var weeklyResetAt: Date?
     var fiveHourUsedPercent: Int?
     var fiveHourResetAt: Date?
+    /// Kimi's membership name, e.g. "Allegretto"; empty when unknown.
+    var planName: String = ""
 
     var timeUntilWeeklyReset: String {
         formatTimeUntil(weeklyResetAt)
@@ -100,6 +102,9 @@ final class KimiAPIService {
     static let shared = KimiAPIService()
 
     private let codeUsageURL = URL(string: "https://api.kimi.com/coding/v1/usages")!
+    private let codeProfileURL = URL(string: "https://api.kimi.com/coding/v1/me")!
+    private var cachedPlan: (name: String, fetchedAt: Date)?
+    private var planRetryAt: Date?
     private let cliOAuthTokenURL = URL(string: "https://auth.kimi.com/api/oauth/token")!
     private let webUsageURL = URL(
         string: "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages"
@@ -157,6 +162,8 @@ final class KimiAPIService {
     func clearCache() {
         lastAuthSource = .none
         cachedCLICredential = nil
+        cachedPlan = nil
+        planRetryAt = nil
         lastCLICredentialCheck = nil
     }
 
@@ -565,7 +572,26 @@ final class KimiAPIService {
         }
 
         let data = try await responseData(for: request)
-        return try parseCodeAPIUsage(data)
+        var usage = try parseCodeAPIUsage(data)
+        usage.planName = await planName(authorizedLike: request)
+        return usage
+    }
+
+    /// Best-effort plan read with the usage request's credentials. Plans rarely
+    /// change, so a success is reused for hours and a failure keeps the last name.
+    private func planName(authorizedLike usageRequest: URLRequest) async -> String {
+        if let cachedPlan, Date().timeIntervalSince(cachedPlan.fetchedAt) < 6 * 3600 { return cachedPlan.name }
+        if let planRetryAt, planRetryAt > Date() { return cachedPlan?.name ?? "" }
+        var request = usageRequest
+        request.url = codeProfileURL
+        guard let data = try? await responseData(for: request) else {
+            planRetryAt = Date().addingTimeInterval(600)
+            return cachedPlan?.name ?? ""
+        }
+        let name = CPAClient.parseKimiProfilePlan(data) ?? ""
+        cachedPlan = (name, Date())
+        planRetryAt = nil
+        return name
     }
 
     private func fetchWebUsage(token: String) async throws -> KimiUsageData {

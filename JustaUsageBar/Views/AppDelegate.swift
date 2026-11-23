@@ -375,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             rows.append(UsagePanelRow(label: "7d", percent: kimi.weeklyUsedPercent, resetText: kimi.timeUntilWeeklyReset))
             let error = viewModel.kimiError
             cards.append(UsagePanelCard(
-                provider: .kimi, detail: "", rows: rows,
+                provider: .kimi, detail: kimi.planName, rows: rows,
                 message: error, actionTitle: error != nil ? "Kimi Code Setup…" : nil
             ))
         }

@@ -10,6 +10,10 @@ final class CPAClient {
     private var codeAssistRetryAt: [String: Date] = [:]
     private var antigravityHostRetryAt: [String: Date] = [:]
     private var resolvedAntigravityProjectIDs: [String: String] = [:]
+    private var subscriptionPlans: [String: (plan: String, fetchedAt: Date)] = [:]
+    private var subscriptionPlanRetryAt: [String: Date] = [:]
+    /// Plans rarely change, so one profile read covers many quota refreshes.
+    private static let subscriptionPlanTTL: TimeInterval = 6 * 3600
 
     private static let antigravityQuotaURLs = [
         "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
@@ -119,6 +123,9 @@ final class CPAClient {
             throw CPAError.message("Quota queries are unsupported for this CPA account authentication.")
         }
         var reading = try Self.parse(await outbound(url: url, account: account, headers: headers).data, provider: account.provider)
+        if let plan = try await subscriptionPlan(for: account, headers: headers), !plan.isEmpty {
+            reading.plan = plan
+        }
         let inventoryKey = account.provider.rawValue + ":" + account.id + ":" + (account.chatGPTAccountID ?? "")
         let inventory: (url: String, headers: [String: String], parse: (Data) throws -> BankedResets)?
         switch account.provider {
@@ -147,6 +154,56 @@ final class CPAClient {
             }
         }
         return reading
+    }
+
+    /// Reads the plan name for providers whose quota response omits it. Failures
+    /// keep the last known plan and never prevent quota display.
+    private func subscriptionPlan(for account: CPAAccount, headers: [String: String]) async throws -> String? {
+        let url: String
+        let parse: (Data) -> String?
+        switch account.provider {
+        case .claude:
+            url = "https://api.anthropic.com/api/oauth/profile"
+            parse = Self.parseClaudeProfilePlan
+        case .kimi:
+            url = account.variant == "kimi-ai" ? "https://api.kimi.ai/coding/v1/me" : "https://api.kimi.com/coding/v1/me"
+            parse = Self.parseKimiProfilePlan
+        default:
+            return nil
+        }
+        let key = account.provider.rawValue + ":" + account.id
+        let cached = subscriptionPlans[key]
+        if let cached, Date().timeIntervalSince(cached.fetchedAt) < Self.subscriptionPlanTTL { return cached.plan }
+        guard subscriptionPlanRetryAt[key, default: .distantPast] <= Date() else { return cached?.plan }
+        do {
+            let plan = parse(try await outbound(url: url, account: account, headers: headers).data) ?? ""
+            subscriptionPlans[key] = (plan, Date())
+            subscriptionPlanRetryAt[key] = nil
+            return plan
+        } catch {
+            try Task.checkCancellation()
+            var retryAfter = Date().addingTimeInterval(600)
+            if case CPAError.http(_, let serverRetry?) = error { retryAfter = max(retryAfter, serverRetry) }
+            subscriptionPlanRetryAt[key] = retryAfter
+            return cached?.plan
+        }
+    }
+
+    /// `organization.organization_type` is e.g. `claude_max`; `rate_limit_tier`
+    /// distinguishes Max 5x from Max 20x.
+    nonisolated static func parseClaudeProfilePlan(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let organization = root["organization"] as? [String: Any],
+              let type = organization["organization_type"] as? String else { return nil }
+        let subscription = type.lowercased().hasPrefix("claude_") ? String(type.dropFirst("claude_".count)) : type
+        return PlanNames.claude(subscriptionType: subscription, rateLimitTier: organization["rate_limit_tier"] as? String)
+    }
+
+    /// Kimi's own membership name, e.g. `Allegretto`, so renamed tiers need no app update.
+    nonisolated static func parseKimiProfilePlan(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let name = safeText(root["user_level_name"], limit: 40)
+        return name.isEmpty ? nil : name
     }
 
     private func fetchAntigravityCodeAssist(for account: CPAAccount, headers: [String: String]) async throws -> (plan: String?, projectID: String?) {
@@ -639,6 +696,7 @@ final class CPAClient {
         var plan = root["plan_type"] as? String ?? ""
         switch provider {
         case .codex:
+            plan = PlanNames.codex(root["plan_type"] as? String)
             if let limits = root["rate_limit"] as? [String: Any] {
                 for key in ["primary_window", "secondary_window"] {
                     guard let entry = limits[key] as? [String: Any],

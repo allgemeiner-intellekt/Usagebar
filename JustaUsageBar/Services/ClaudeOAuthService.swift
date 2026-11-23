@@ -29,6 +29,12 @@ final class ClaudeOAuthService {
         var refreshToken: String?
         var expiresAt: Date?
         var scopes: [String]
+        var subscriptionType: String? = nil
+        var rateLimitTier: String? = nil
+
+        var planName: String {
+            PlanNames.claude(subscriptionType: subscriptionType, rateLimitTier: rateLimitTier)
+        }
     }
 
     private init() {}
@@ -106,7 +112,9 @@ final class ClaudeOAuthService {
             accessToken: accessToken,
             refreshToken: refreshToken,
             expiresAt: expiresAt,
-            scopes: scopes
+            scopes: scopes,
+            subscriptionType: oauth["subscriptionType"] as? String,
+            rateLimitTier: oauth["rateLimitTier"] as? String
         )
     }
 
@@ -304,7 +312,9 @@ final class ClaudeOAuthService {
 
         switch httpResponse.statusCode {
         case 200:
-            return try parseOAuthUsageResponse(data)
+            var usage = try parseOAuthUsageResponse(data)
+            usage.planName = creds.planName
+            return usage
         case 429:
             throw APIError.rateLimited(retryAfter: HTTPRetryAfter.date(from: httpResponse))
         case 400, 401, 403:
@@ -324,7 +334,9 @@ final class ClaudeOAuthService {
                         clearPersistedCredentials()
                         throw APIError.unauthorized
                     }
-                    return try parseOAuthUsageResponse(retryData)
+                    var usage = try parseOAuthUsageResponse(retryData)
+                    usage.planName = newCreds.planName
+                    return usage
                 } catch let rateLimitError as APIError where rateLimitError.isRateLimited {
                     // Temporary throttle: keep credentials, try again next tick.
                     throw rateLimitError
@@ -392,7 +404,9 @@ final class ClaudeOAuthService {
             accessToken: accessToken,
             refreshToken: newRefreshToken,
             expiresAt: expiresAt,
-            scopes: cachedCredentials?.scopes ?? []
+            scopes: cachedCredentials?.scopes ?? [],
+            subscriptionType: cachedCredentials?.subscriptionType,
+            rateLimitTier: cachedCredentials?.rateLimitTier
         )
     }
 
@@ -408,7 +422,9 @@ final class ClaudeOAuthService {
             accessToken: credentials.accessToken,
             refreshToken: credentials.refreshToken,
             expiresAt: credentials.expiresAt,
-            scopes: credentials.scopes
+            scopes: credentials.scopes,
+            subscriptionType: credentials.subscriptionType,
+            rateLimitTier: credentials.rateLimitTier
         )
     }
 
@@ -421,7 +437,9 @@ final class ClaudeOAuthService {
             accessToken: stored.accessToken,
             refreshToken: stored.refreshToken,
             expiresAt: stored.expiresAt,
-            scopes: stored.scopes
+            scopes: stored.scopes,
+            subscriptionType: stored.subscriptionType,
+            rateLimitTier: stored.rateLimitTier
         )
     }
 

@@ -30,6 +30,8 @@ final class CredentialStorage {
         var refreshToken: String?
         var expiresAt: Date?
         var scopes: [String]
+        var subscriptionType: String? = nil
+        var rateLimitTier: String? = nil
     }
 
     init(storageURL: URL? = nil, encryptionKey: SymmetricKey? = nil) {

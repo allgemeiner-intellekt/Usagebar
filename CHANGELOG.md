@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Name panel cards after the products whose quotas they show: Claude Code, Codex, Antigravity, Cursor, Kimi Code, Z.ai and xAI.
+- Show Codex plans by OpenAI's names (Pro 100, Pro 200, Pro 500, Business…) instead of internal codes such as "Prolite"; unknown codes show nothing.
+- Show the Claude Code plan (Pro, Max 5x, Max 20x, Team, Enterprise) and the Kimi Code membership (e.g. Allegretto, as Kimi names it) beside their card titles, for both Direct and CLIProxyAPI sources. The sign-in method moved out of the card title row and remains in Settings.
+
 ## [1.11.1](https://github.com/betoxf/Usagebar/releases/tag/v1.11.1) — 2026-10-25
 
 - Show the Usagebar icon beside the title of the usage panel.

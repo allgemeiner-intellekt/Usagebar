@@ -40,7 +40,7 @@ Usage limits matter most while you are working. Usagebar puts your Claude Code, 
 
 | Capability | What it gives you |
 | --- | --- |
-| Multiple providers | Track Claude, Codex, KimiCode, Cursor, z.ai, and XAI (Grok Build) from one status item. |
+| Multiple providers | Track Claude Code, Codex, Kimi Code, Cursor, z.ai, and xAI (Grok Build) from one status item. |
 | Fixed menu-bar icon | A compact monochrome chart symbol opens the panel with either a left or right click. |
 | Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Provider visibility switches are under the panel's **⋯** button. |
 | Codex banked resets | A compact count and nearest expiry. Click the count for all quantities and expiration dates in your Mac's time zone. Zero resets are hidden; failed requests show unavailable. Display only, with no redemption action. |
@@ -96,10 +96,10 @@ Cursor is discovered from the Cursor.app login (no extra setup). z.ai appears
 when a `Z_AI_API_KEY` is configured (environment variable or
 `~/.zai/config.json` with `{"apiKey": "..."}`).
 
-KimiCode is discovered from `~/.kimi-code/credentials/kimi-code.json` after
+Kimi Code is discovered from `~/.kimi-code/credentials/kimi-code.json` after
 `kimi login`. Usagebar uses the same Kimi Code usage source as CodexBar and
 shows the weekly quota plus the rolling five-hour window. A Kimi Code API key
-or `kimi-auth` web token can also be saved from **Set Up KimiCode…**.
+or `kimi-auth` web token can also be saved from **Set Up Kimi Code…**.
 
 ### Fewer menu-bar icons
 

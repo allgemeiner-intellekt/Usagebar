@@ -22,6 +22,7 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O 
   "$ROOT_DIR/JustaUsageBar/Models/DisplayProvider.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/GlobalHotkey.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/UsageData.swift" \
+  "$ROOT_DIR/JustaUsageBar/Models/PlanNames.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/BankedResets.swift" \
   "$ROOT_DIR/JustaUsageBar/Models/CPAModels.swift" \
   "$ROOT_DIR/JustaUsageBar/Services/CPAClient.swift" \

@@ -777,7 +777,7 @@ private struct KimiSetupSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Set Up KimiCode")
+            Text("Set Up Kimi Code")
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -788,7 +788,7 @@ private struct KimiSetupSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open KimiCode Console") {
+                Button("Open Kimi Code Console") {
                     if let url = URL(string: "https://www.kimi.com/code/console") {
                         NSWorkspace.shared.open(url)
                     }

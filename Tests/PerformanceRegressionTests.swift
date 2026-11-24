@@ -14,12 +14,9 @@ struct PerformanceRegressionTests {
         try await testAntigravityCPA()
         testRefreshPolicy()
         testRetryAfter()
-        testTimerLifetime()
-        try await testViewModel()
-        try await testPanelRefresh()
+        try testCodexBankedResetParsing()
         await testProviderHTTP()
-        try testKeychainTool()
-        print("PASS: refresh policy, retry headers, timer lifetime, refresh orchestration, panel freshness, request sessions, and keychain reads")
+        print("PASS: refresh cadence, retry headers, reset inventory parsing, and request sessions")
     }
 
     static func check(_ condition: Bool, _ message: String) {
@@ -33,10 +30,6 @@ struct PerformanceRegressionTests {
         check(UsageRefreshPolicy.interval(base: 600, lowPower: true) == 600, "Respect slower user cadence")
         check(UsageRefreshPolicy.interval(base: 120, visible: true) == 120, "Visible reading slowed down")
         check(UsageRefreshPolicy.interval(base: 120, visible: false) == 600, "Hidden reading kept the visible cadence")
-        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: [.codex]) == [.codex], "Hidden provider selected")
-        check(UsageRefreshPolicy.targets(available: [.claude, .codex], enabled: []) == [.claude], "Lost authenticated fallback")
-        check(UsageRefreshPolicy.targets(available: [.codex], enabled: []) == [.codex], "No available fallback")
-        check(UsageRefreshPolicy.targets(available: [], enabled: [.claude]).isEmpty, "Invented credentials")
         var state = ProviderRefreshState()
         check(state.isDue(at: now, interval: 120, manual: false), "Initial data must fetch")
         state.lastAttempt = now
@@ -76,208 +69,6 @@ struct PerformanceRegressionTests {
         check(ISO8601Timestamp.date(from: "soon") == nil, "Invalid timestamp accepted")
     }
 
-    @MainActor static func testTimerLifetime() {
-        var firstCount = 0
-        var replacementCount = 0
-        var owner: RepeatingTimer? = RepeatingTimer()
-        owner?.start(every: 0.01) { firstCount += 1 }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
-        check(firstCount > 0, "Timer did not fire")
-        let previous = firstCount
-        owner?.start(every: 0.01) { replacementCount += 1 }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
-        check(firstCount == previous && replacementCount > 0, "Replacing timer left the old one alive")
-        weak var weakOwner: RepeatingTimer?
-        weakOwner = owner
-        owner = nil
-        let countAtClose = replacementCount
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
-        check(weakOwner == nil && replacementCount == countAtClose, "Orphan timer fired after owner deallocation")
-    }
-
-    @MainActor static func eventually(_ condition: @escaping @MainActor () async -> Bool) async throws {
-        for _ in 0..<200 {
-            if await condition() { return }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        fatalError("Timed out waiting for refresh state")
-    }
-
-    @MainActor static func testViewModel() async throws {
-        await FakeProviders.reset()
-        let model = UsageViewModel(startAutomatically: false)
-        defer { model.stopAutoRefresh() }
-        model.showClaude = true
-        model.showCodex = true
-        model.showCursor = false
-        model.showKimi = false
-        model.showZai = false
-        model.showXai = false
-        await model.refresh()
-        var counts = await FakeProviders.counts
-        check(counts[.claude] == 1 && counts[.codex] == 1 && counts[.kimi] == nil, "Hidden provider fetched")
-        check(model.hasKimiCredentials, "Hidden provider cannot be rediscovered")
-        let probes = await FakeProviders.probes
-        for _ in 0..<100 {
-            _ = model.hasCredentials
-            _ = model.hasClaudeCredentials
-            _ = model.hasCodexCredentials
-            _ = model.hasKimiCredentials
-        }
-        let probesAfterDrawing = await FakeProviders.probes
-        check(probesAfterDrawing == probes, "UI availability checks performed credential I/O")
-        let peak = await FakeProviders.peakConcurrent
-        check(peak >= 2, "Provider fetches no longer run concurrently")
-        model.showKimi = true
-        model.providerSettingsChanged()
-        try await eventually { await FakeProviders.counts[.kimi] == 1 && !model.isLoading }
-        counts = await FakeProviders.counts
-        check(counts[.claude] == 1 && counts[.codex] == 1, "Enabling one provider refetched every provider")
-        let probesAfterEnabling = await FakeProviders.probes
-        check(probesAfterEnabling == probes, "A routine refresh repeated the sign-in check")
-        let successBeforeFailure = model.refreshStates[.claude]?.lastSuccess
-        await FakeProviders.setError(.rateLimited(retryAfter: Date().addingTimeInterval(300)), for: .claude)
-        await model.refresh()
-        counts = await FakeProviders.counts
-        let countAtLimit = counts[.claude]
-        check(model.claudeError != nil, "Rate limit was hidden")
-        check(model.refreshStates[.claude]?.lastSuccess == successBeforeFailure, "Failure marked old data fresh")
-        await model.refresh()
-        counts = await FakeProviders.counts
-        check(counts[.claude] == countAtLimit, "Manual refresh ignored Retry-After")
-        model.powerModeChanged(lowPower: true)
-        check(model.effectiveRefreshInterval == 300, "Low Power Mode not applied")
-        model.powerModeChanged(lowPower: false)
-        check(model.effectiveRefreshInterval == 120, "Normal cadence not restored")
-        await FakeProviders.setDelay(1_000_000_000)
-        let outstanding = Task { await model.refresh() }
-        try await eventually { await FakeProviders.concurrent > 0 }
-        let previousCodexValue = model.codexUsageData.testValue
-        model.setDisplayAsleep(true)
-        await outstanding.value
-        check(model.codexError == nil, "Cancellation appeared as a provider failure")
-        check(model.codexUsageData.testValue == previousCodexValue, "Cancelled response replaced usage")
-        check(model.refreshStates[.codex]?.lastAttempt == nil, "Cancelled request suppressed wake refresh")
-        model.setSystemAsleep(true)
-        model.setDisplayAsleep(false)
-        check(model.isBackgroundSuspended, "Display notification resumed work before system wake")
-        await FakeProviders.setDelay(5_000_000)
-        model.setSystemAsleep(false)
-        try await eventually { !model.isLoading && model.codexUsageData.testValue > previousCodexValue }
-        let overlaps = await FakeProviders.overlappingProviderRequests
-        check(overlaps == 0, "A provider had overlapping requests")
-        check(model.scheduledRefreshInterval == 600, "Closed panel kept the on-screen cadence")
-        counts = await FakeProviders.counts
-        let countsBeforeOpen = counts
-        model.usageVisibilityChanged(isVisible: true)
-        check(model.scheduledRefreshInterval == 120, "Open panel kept the hidden cadence")
-        model.usageVisibilityChanged(isVisible: false)
-        try await Task.sleep(nanoseconds: 50_000_000)
-        counts = await FakeProviders.counts
-        check(counts == countsBeforeOpen, "Showing fresh readings refetched them")
-        model.showClaude = false
-        model.showCodex = false
-        model.showKimi = false
-        check(model.refreshTargets == [.claude], "All-hidden fallback disappeared")
-
-        // Verify persisted refreshInterval clamping and reload.
-        check(model.refreshInterval == 120, "Default refresh interval changed")
-        model.updateRefreshInterval(10)
-        check(model.refreshInterval == 30, "Refresh interval below lower bound was not clamped")
-        model.updateRefreshInterval(999)
-        check(model.refreshInterval == 600, "Refresh interval above upper bound was not clamped")
-        model.updateRefreshInterval(300)
-        let reloadedIntervalModel = UsageViewModel(startAutomatically: false)
-        defer { reloadedIntervalModel.stopAutoRefresh() }
-        check(reloadedIntervalModel.refreshInterval == 300, "Persisted refresh interval did not reload")
-        model.updateRefreshInterval(UsageViewModel.defaultRefreshInterval)
-    }
-
-    /// Drive the real visibility/scheduler path with old cache entries and fake providers.
-    @MainActor static func testPanelRefresh() async throws {
-        await FakeProviders.reset()
-        let model = UsageViewModel(startAutomatically: false)
-        defer { model.stopAutoRefresh() }
-        model.showClaude = true
-        model.showCodex = true
-        model.showKimi = false
-        model.showCursor = false
-        model.showZai = false
-        model.showXai = false
-        await model.refresh()
-        model.ageReadings(by: 180)
-        // Three-minute-old data is still fresh enough for a closed panel.
-        model.providerSettingsChanged()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        var counts = await FakeProviders.counts
-        check(counts[.claude] == 1 && counts[.codex] == 1, "Closed panel polled at the on-screen rate")
-        model.usageVisibilityChanged(isVisible: true)
-        try await eventually { await FakeProviders.counts[.codex] == 2 && !model.isLoading }
-        counts = await FakeProviders.counts
-        check(counts[.claude] == 2, "Opening the panel left stale data")
-        model.usageVisibilityChanged(isVisible: false)
-        model.usageVisibilityChanged(isVisible: true)
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let countsAfterReopen = await FakeProviders.counts
-        check(countsAfterReopen == counts, "Reopening fresh data made duplicate requests")
-        model.usageVisibilityChanged(isVisible: false)
-        model.ageReadings(by: 180)
-        model.coolDown(.claude, until: Date().addingTimeInterval(300))
-        model.usageVisibilityChanged(isVisible: true)
-        try await eventually { await FakeProviders.counts[.codex] == 3 && !model.isLoading }
-        counts = await FakeProviders.counts
-        check(counts[.claude] == 2, "Opening the panel bypassed server cooldown")
-        model.usageVisibilityChanged(isVisible: false)
-        model.powerModeChanged(lowPower: true)
-        check(model.scheduledRefreshInterval == 1500, "Closed panel ignored Low Power Mode")
-        model.usageVisibilityChanged(isVisible: true)
-        check(model.scheduledRefreshInterval == 300, "Open panel ignored Low Power Mode")
-    }
-
-    /// A keychain dialog must never hold up the caller, be stacked, or be raised again after a refusal.
-    static func testKeychainTool() throws {
-        // Stands in for /usr/bin/security: answers at once, or only after the
-        // user has dealt with a dialog.
-        let stub = FileManager.default.temporaryDirectory.appendingPathComponent("usagebar-security-\(getpid())")
-        try """
-        #!/bin/sh
-        case "$3" in
-            trusted) echo " secret " ;;
-            missing) exit 44 ;;
-            allowed) sleep 1; echo later ;;
-            refused) sleep 1; exit 128 ;;
-        esac
-        """.write(to: stub, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
-        defer { try? FileManager.default.removeItem(at: stub) }
-
-        func answer(_ tool: KeychainTool, _ service: String) -> String? {
-            for _ in 0..<300 {
-                if let password = tool.password(service: service, account: "me") { return password }
-                usleep(10_000)
-            }
-            return nil
-        }
-
-        let tool = KeychainTool(executable: stub.path, patience: 0.3)
-        check(tool.password(service: "trusted", account: "me") == "secret", "Trusted read failed")
-        check(tool.password(service: "missing", account: "") == nil, "Read an item that does not exist")
-        check(tool.password(service: "trusted", account: "") == "secret", "A missing item counted as a refusal")
-
-        let asked = Date()
-        check(tool.password(service: "allowed", account: "me") == nil, "Read a secret before it was allowed")
-        check(Date().timeIntervalSince(asked) < 0.9, "Waited for the keychain dialog")
-        check(tool.password(service: "trusted", account: "me") == nil, "Stacked a second dialog")
-        check(answer(tool, "allowed") == "later", "Lost the answer to the dialog")
-
-        check(tool.password(service: "refused", account: "me") == nil, "Read a secret before it was allowed")
-        usleep(1_300_000)
-        check(tool.password(service: "trusted", account: "me") == nil, "Asked again after a refusal")
-        check(tool.password(service: "trusted", account: "me") == nil, "Asked again after a refusal")
-        tool.reset()
-        check(tool.password(service: "trusted", account: "me") == "secret", "Refresh could not ask again")
-    }
-
     /// Overlapping and repeated requests must never reach a session that was already closed.
     static func testProviderHTTP() async {
         // Nothing listens on this port, so every request fails without leaving the Mac.
@@ -292,19 +83,5 @@ struct PerformanceRegressionTests {
                 }
             }
         }
-    }
-}
-
-extension UsageViewModel {
-    fileprivate func ageReadings(by age: TimeInterval) {
-        for provider in refreshTargets {
-            refreshStates[provider]?.lastAttempt = Date().addingTimeInterval(-age)
-            refreshStates[provider]?.lastSuccess = Date().addingTimeInterval(-age)
-        }
-    }
-
-    fileprivate func coolDown(_ provider: DisplayProvider, until date: Date) {
-        refreshStates[provider]?.serverRetryAt = date
-        refreshStates[provider]?.retryAt = date
     }
 }

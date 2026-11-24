@@ -1,129 +1,52 @@
 # Usagebar architecture
 
-Usagebar is a native macOS status-bar application with no project-operated backend and no embedded web runtime for its normal usage flow.
+Usagebar is a native macOS menu-bar client for reading account limits from a user-configured CLIProxyAPI (CPA) instance.
 
 ```mermaid
 flowchart LR
-    subgraph Local["Local Mac"]
-        CLI["Provider CLI credentials"]
-        Store["Encrypted Usagebar storage"]
-        Services["Provider services"]
-        VM["UsageViewModel"]
-        UI["AppDelegate and status menu"]
-        CLI --> Services
-        Store --> Services
-        Services --> VM
-        VM --> UI
-    end
-    Services --> Claude["Anthropic usage API"]
-    Services --> Codex["OpenAI usage API"]
-    Services --> Kimi["Kimi Code usage API"]
-    UI --> Releases["GitHub Releases API"]
+    Store["Encrypted connection settings"] --> Client["CPAClient"]
+    Client <-->|"Account discovery and quota reads"| CPA["CLIProxyAPI"]
+    Client --> VM["UsageViewModel"]
+    VM --> Panel["AppKit menu-bar panel"]
+    VM --> Settings["SwiftUI Settings"]
 ```
 
-## Component responsibilities
+## Components
 
 | Component | Responsibility |
 | --- | --- |
-| `JustaUsageBarApp` | SwiftUI entry point and `⌘,` settings command routing. |
-| `AppDelegate` | Creates a square `NSStatusItem` with a fixed template symbol, the usage panel, the unified settings window, panel provider marks, and release checks. |
-| `UsagePanelView` | The panel either mouse button opens: one card per provider with its mark, plan, meters, and reset times. Another click, an outside click, or Escape closes it; the gear button or `⌘,` opens the unified Settings window, `⌘R` refreshes, and `⌘Q` quits. Cards have no menu-bar selection action. |
-| `SettingsView` | Unified macOS sidebar Settings window (`General`, `Providers`, `Data Source`, `About`) hosting Launch at Login, Refresh Interval, provider visibility, Antigravity pool filters, Direct credential setup sheets, CPA configuration, and build/repository links. |
-| `UsageViewModel` | UI state, cached credential availability, per-provider refresh scheduling, power-state handling, and launch at login. |
-| `ProviderActor` | Serializes provider and credential storage work away from the UI actor. |
-| `UsageRefreshPolicy` | Provider selection, refresh cadence, retry deadlines, and Retry-After parsing. |
-| `ProviderHTTP` | Sends every provider and release request on a short-lived session and closes it when the last request finishes. |
-| `ClaudeAPIService` | Selects Claude authentication mode and normalizes responses. |
-| `ClaudeOAuthService` | Discovers Claude CLI credentials, refreshes OAuth tokens, and fetches usage. |
-| `CodexAPIService` | Discovers Codex credentials, resolves the base URL, refreshes OAuth, and normalizes usage. |
-| `KimiAPIService` | Discovers Kimi Code CLI credentials, selects API or web-token authentication, and normalizes weekly plus five-hour usage. |
-| `ZaiAPIService` | Discovers a z.ai API key from the environment, Keychain, or local config files and normalizes quota windows. |
-| `KeychainTool` | Reads a Keychain secret through `/usr/bin/security` without holding up other work when that tool has to ask. |
-| `XaiAPIService` | Discovers Grok Build credentials from `~/.grok/auth.json`, refreshes OIDC tokens, and normalizes weekly Grok Build credits. |
-| `CredentialStorage` | Encrypts Usagebar-managed Claude browser-session data and optional Kimi credentials locally. |
+| `AppDelegate` | Owns the fixed template status item, panel and Settings window. Routes keyboard shortcuts and updates. |
+| `UsagePanelView` | Shows per-provider cards with independent account readings, reset times and connection setup. |
+| `SettingsView` | Hosts General, Providers, Connection and About. |
+| `UsageViewModel` | Loads the saved connection, reconciles account discovery, and schedules, cancels and publishes refreshes. |
+| `CPAClient` | Negotiates CPA management routes, pins quota requests to the account and normalizes provider responses. |
+| `CredentialStorage` | Encrypts the configured CPA address and management key locally. |
+| `ProviderHTTP` | Shares an ephemeral URL session across overlapping requests and closes it after the last request finishes. |
 
-## Runtime data flow
+## Refresh lifecycle
 
-1. `UsageViewModel` discovers provider availability asynchronously on `ProviderActor` and publishes an in-memory snapshot for UI decisions. It repeats discovery on every manual refresh, and otherwise no more often than hidden readings refresh.
-2. Enabled providers refresh concurrently on launch. If external preference edits turn every display switch off, the first authenticated provider in display order remains a refresh fallback.
-3. One owned refresh task and one one-shot timer schedule the next due work. The base refresh interval defaults to two minutes (configurable in Settings → General across 1m, 2m, 5m, and 10m and persisted in `UserDefaults`); Low Power Mode raises it to at least five minutes. Timers have 10% tolerance. That interval applies while the usage panel or settings window is open. With both closed, every enabled provider refreshes five times less often (normally every ten minutes). Opening the panel immediately checks the shorter cadence and refreshes stale providers while cached values remain visible. Reopening fresh data does not duplicate requests, and retries still respect backoff and server cooldowns.
-4. Each provider tracks its last attempt, last successful update, and retry deadline. Failures back off from the normal interval up to 30 minutes. HTTP `Retry-After` deadlines are honored even for manual refreshes. A success clears the failure delay.
-5. Display or system sleep cancels pending requests and stops timers. Cancellation preserves credentials and previous readings. Wake refreshes only stale providers.
-6. A provider re-enabled in Settings → Providers refreshes immediately unless a server cooldown is still active. Manual Refresh bypasses local delay and rediscovers credentials.
-7. `AppDelegate` assigns the fixed `chart.bar` system symbol once as a template image. AppKit handles menu-bar tint and display scale; usage, errors, setup, and update state do not change the symbol or status-item width. Normalized usage and credential snapshots populate the panel only.
-8. The usage panel is built when it opens, and the Settings window observes `UsageViewModel` directly, so reset countdowns and per-provider freshness labels stay current without a UI timer.
+1. On launch, `UsageViewModel` loads the saved CPA configuration independently of any legacy source preference. Without a saved connection, the panel offers a link to Connection settings and schedules no background polls.
+2. **Test & Save** authenticates and reads the account list before persisting a new connection. An authenticated empty list is valid. Once a connection is replaced or cleared, in-flight results from the previous connection are discarded.
+3. Successful discovery reconciles accounts and retains cached readings for matching identities. Disabled and expired accounts stay visible without quota requests. Eligible accounts under visible providers refresh concurrently. Discovery failures keep cached readings and defer account requests until discovery recovers.
+4. The one-shot timer schedules the next due discovery or account refresh. While the panel or Settings is open, the default cadence is two minutes, configurable to 1, 2, 5 or 10 minutes. With both closed, the interval is five times longer. Low Power Mode raises the base interval to at least five minutes. Opening the panel checks for stale data at the visible cadence.
+5. Display or system sleep cancels active work and stops timers. Wake checks for stale data. Failures back off up to 30 minutes for local retry delays. Manual refresh bypasses local delays and respects server `Retry-After` deadlines.
 
-UI state and drawing remain main-actor isolated. Provider services and encrypted credential storage share `ProviderActor`, a separate serial executor. Network awaits permit requests to overlap while keeping credential mutation serialized. No provider service is called by a drawing or provider-availability getter.
-
-Requests use one ephemeral `URLSession` with no cookie storage or response cache. Requests that overlap share it, and the last one to finish invalidates it, so no HTTP/2 or HTTP/3 connection stays open between refreshes. A kept-alive connection wakes the process for keepalives and network-path updates; a new handshake per refresh costs less.
-
-Claude and Cursor cache absent credentials briefly; Kimi caches credential discovery for 30 seconds but always rereads during usage fetches and inside its OAuth refresh lock. Explicit Refresh clears discovery caches. An unchanged Claude OAuth mirror is not rewritten, and the existing device-derived encryption key is reused in memory.
-
-The browser login view owns a cancellable repeating timer. Dismantling the view stops polling, cancels scheduled extraction, stops navigation, and ignores late callbacks.
-
-## Menu-bar presentation
-
-The fixed icon is the only menu-bar mode. Provider cycling, focus following, process-table scans, and their preferences and image caches have been removed. Old saved menu-bar display preferences are ignored; provider visibility and credential preferences remain intact. The shared repeating timer is still used by browser authentication.
-
-The panel's appearance and provider order are preserved. Its cards no longer show a selected-provider indicator or react to clicks outside their explicit action buttons. Display switches still control the panel cards and refresh targets, and retain at least one authenticated provider through the normal UI.
-
-## Credential discovery
-
-Claude priority is: Usagebar's encrypted OAuth mirror, `~/.claude/.credentials.json`, the `Claude Code-credentials` Keychain item through `/usr/bin/security`, direct Keychain lookup, then the Usagebar-managed browser session fallback.
-
-Codex reads `${CODEX_HOME}/auth.json` or `~/.codex/auth.json`. It reads `chatgpt_base_url` from `${CODEX_HOME}/config.toml` when present and otherwise uses `https://chatgpt.com`.
-
-Kimi priority mirrors CodexBar: a saved or `KIMI_CODE_API_KEY` API key, a Kimi Code CLI OAuth credential from `${KIMI_CODE_HOME}/credentials/kimi-code.json` (default `~/.kimi-code/credentials/kimi-code.json`), then a saved or `KIMI_AUTH_TOKEN` `kimi-auth` web token. Usagebar refreshes an expiring CLI access token through Kimi Code's OAuth endpoint and atomically writes the rotated token bundle back to the same CLI-owned file with mode `0600`. The refresh coordinates with Kimi Code's `oauth/kimi-code.lock` convention so concurrent CLI and menu-bar refreshes do not overwrite one another.
-
-z.ai reads `Z_AI_API_KEY`, `ZAI_API_KEY`, or `ZHIPU_API_KEY` from the environment, then a Keychain item named `user.z-ai-api-key`, `openclaw.zai-api-key`, `Z_AI_API_KEY`, or `ZAI_API_KEY`, then `~/.zai/config.json`, `~/.config/zai/config.json`, or `~/.config/codexbar/config.json`. Usagebar finds the Keychain item from its attributes, which never raise a dialog, and reads the secret through `/usr/bin/security`, never in process. That tool created the item, so it reads it without asking, and a permission granted to it survives app updates; one granted to Usagebar's ad hoc signed binary is lost with every build. If the tool does have to ask, Usagebar waits at most 1.5 seconds, leaves the dialog for the user, and carries on with the other providers. An answer is picked up by the next lookup, and after a refusal only **Refresh** asks again. A key that was found is kept until **Refresh** or until z.ai rejects it.
+UI state is main-actor isolated. `CPAClient`, credential storage and session management share `ProviderActor` away from the UI. Network awaits allow requests to overlap. The session uses no cookie store or response cache and stays open only while requests are in flight.
 
 ## Network boundaries
 
-| Purpose | Default destination |
-| --- | --- |
-| Claude OAuth usage | `https://api.anthropic.com/api/oauth/usage` |
-| Claude banked reset grants (CPA only, GET only) | `https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1` |
-| Claude OAuth refresh | `https://platform.claude.com/v1/oauth/token` |
-| Claude browser-session usage | `https://claude.ai/api/organizations/{orgId}/usage` |
-| Codex usage | `https://chatgpt.com/backend-api/wham/usage` |
-| Codex banked reset inventory (GET only) | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
-| Codex OAuth refresh | `https://auth.openai.com/oauth/token` |
-| Antigravity quota summary (CPA only, POST) | `https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` (fallback: `daily-cloudcode-pa.sandbox.googleapis.com`, `cloudcode-pa.googleapis.com`) |
-| Antigravity subscription tier / project fallback (CPA only, POST) | `https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` |
-| Cursor weekly allowance | `https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus` |
-| Kimi Code usage | `https://api.kimi.com/coding/v1/usages` |
-| Kimi Code OAuth refresh | `https://auth.kimi.com/api/oauth/token` |
-| Kimi web-token usage fallback | `https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages` |
-| Personal updates | Opens `https://github.com/allgemeiner-intellekt/Usagebar/actions/workflows/ci.yml` in the browser; background release discovery is disabled |
-| z.ai quota | `https://api.z.ai/api/monitor/usage/quota/limit` |
-| XAI / Grok Build billing | `https://cli-chat-proxy.grok.com/v1/billing?format=credits` |
-| XAI OIDC refresh | `https://auth.x.ai/oauth2/token` |
+Usagebar uses CPA management endpoints for discovery and account-pinned quota reads. The management API transports quota reads in POST requests. See [CLIProxyAPI setup and boundaries](CPA.md) for routes, provider endpoints and reset inventory behavior. Usagebar has no account control, token refresh or reset redemption actions.
 
-A configured Codex base URL changes the Codex usage destination. Provider-private endpoints or payloads can change independently.
-
-Codex refreshes banked reset inventory with the same credentials and refresh cadence as usage. A configured base URL uses the sibling `/api/codex/rate-limit-reset-credits` path. This integration only reads inventory; it cannot redeem resets. It does not store inventory, account identifiers, profile metadata, or raw responses. A failed inventory request preserves usage and any count supplied by the usage response, while showing expiration details as unavailable. Inventory HTTP 429 responses keep their own `Retry-After` deadline, including across manual refreshes, without preventing ordinary usage updates. Cancellation still cancels the provider refresh.
-
-The Codex card uses a compact summary: a positive banked reset count in the title row and the nearest expiration below its usage meter. Clicking the count opens all expiration groups, sorted by date, with quantities, years, local times, and time zones. Explicitly non-expiring resets and missing dates have separate labels. A confirmed zero count hides both count and summary; unavailable inventory remains distinct from zero. Card spacing is reduced without reducing text size, so a weekly Codex meter plus reset summary uses the same height as two ordinary usage meters. The fixed menu-bar icon and other provider information are unchanged.
-
-Claude banked resets are read only through the CPA source. The read uses the `cedar_ember` block of the OAuth usage endpoint, an undocumented contract taken from the CPA management panel, and sends the same Claude Code client identity as that panel. Validation follows the panel: a malformed or duplicate grant, or a bad timestamp, rejects the whole block, which then shows as unavailable. The count is the sum of resets left on unexpired grants. An ineligible account or an empty grant list counts as zero. A missing end date is shown as unknown, not as permanent. The Claude card uses the Codex layout; its popover lists each grant's type (5-hour, weekly, full, or Fable refill), server label, resets left of total, and expiry. Direct Claude sign-in does not read grants and never shows them as unavailable. Usagebar never redeems a grant.
+Personal builds open the fork's GitHub Actions page for updates. `AppDelegate.manualUpdatesOnly` gates the release discovery and update execution paths, including any saved automatic-update preference. The bundle prohibits multiple instances.
 
 ## Local persistence
 
 | Data | Storage |
 | --- | --- |
-| Display & refresh preferences | `UserDefaults` (`@AppStorage` and `refreshInterval` / `hiddenAntigravityPoolIDs`) |
+| CPA base address and management key | `~/Library/Application Support/JustaUsageBar/credentials.enc` |
+| Provider visibility, Antigravity pool filters, refresh interval and global shortcut | `UserDefaults` |
 | Launch at login | `SMAppService.mainApp` |
-| Claude browser-session data, OAuth mirror, and optional Kimi credential | `~/Library/Application Support/JustaUsageBar/credentials.enc` |
-| Provider CLI credentials | Provider-owned files or Keychain items; Kimi OAuth tokens may be refreshed in place, while other provider credentials are read only |
 
-Usagebar-managed credential data uses AES-256-GCM with a key derived from the Mac hardware UUID and an application salt.
+The credential file uses AES-256-GCM with the existing Mac hardware UUID-derived key. The decoder reads the saved CPA connection from older files. Legacy provider settings in the encrypted file are ignored on load and omitted the next time the file is saved.
 
-Personal builds use manual updates from the fork’s Actions artifacts. `AppDelegate.manualUpdatesOnly` disables background release discovery and gates the update execution path, including any saved automatic-update preference. The menu opens the personal build page. The upstream Homebrew implementation and bundled helper remain in source for upstream compatibility but are not invoked in this fork. The bundle prohibits multiple instances. External Homebrew upgrades remain outside this safeguard.
-
-The primary interface is AppKit for precise status-item drawing; SwiftUI is used for settings and authentication. The app runs as `LSUIElement`, so it has no normal Dock icon while running, but the application icon remains visible in Finder and installation surfaces.
-
-Provider changes must keep discovery inside services, raw payload parsing provider-specific, published state in `UsageViewModel`, and menu rendering based on normalized models. New storage or network destinations require documentation and security review.
-
-## Optional CPA source
-
-[CLIProxyAPI setup and boundaries](CPA.md) describes the exclusive global source selection. `CPAClient` lists remote accounts and sends account-pinned quota reads. `UsageViewModel` owns account reconciliation, independent freshness/backoff, and source-switch cancellation. CPA credentials use the existing encrypted store. Direct credential discovery never runs during CPA refreshes. Codex reset inventory and Claude reset grants have their own account-scoped server cooldown. Codex retains counts supplied by usage when expiration details are unavailable.
+The app runs as `LSUIElement`. Its fixed menu-bar icon and the panel's provider cards are drawn from in-memory state. Account identities, readings and raw responses are held in memory.

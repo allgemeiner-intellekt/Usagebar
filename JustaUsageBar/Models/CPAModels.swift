@@ -1,7 +1,5 @@
 import Foundation
 
-nonisolated enum UsageSource: String, CaseIterable { case direct, cpa }
-
 nonisolated struct CPAConnection: Codable, Equatable {
     let address: String
     let key: String

@@ -148,10 +148,20 @@ extension PerformanceRegressionTests {
 
         let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { CPAClient(connection: $0, send: CPAFixture.send) })
         vm.showCodex = true; vm.showKimi = true; vm.showXai = true
-        await FakeProviders.reset()
-        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
-        check(vm.source == .cpa && vm.cpaAccounts.count == 4, "CPA source not enabled")
-        check(await FakeProviders.probes == 0, "CPA discovered local credentials")
+        vm.powerModeChanged(lowPower: false)
+        await CPAFixture.reset()
+        await vm.refresh()
+        check(vm.isCPAConfigured == false && !vm.hasScheduledRefreshForTest, "Unconfigured app must offer setup without polling")
+        check(await CPAFixture.requests.isEmpty, "Unconfigured app issued a request")
+        try await vm.testAndSaveCPA(address: connection.address, key: connection.key)
+        check(vm.isCPAConfigured == true && vm.cpaAccounts.count == 4, "CPA source not enabled")
+        UserDefaults.standard.set("direct", forKey: "usageSource")
+        defer { UserDefaults.standard.removeObject(forKey: "usageSource") }
+        let upgraded = UsageViewModel(startAutomatically: false, makeCPAClient: { CPAClient(connection: $0, send: CPAFixture.send) })
+        await upgraded.refreshIfStaleForCPA()
+        check(upgraded.isCPAConfigured == true && upgraded.cpaAccounts.count == 4,
+              "Legacy source preference must not prevent loading a saved connection")
+        upgraded.stopAutoRefresh()
         let success = vm.cpaAccounts.first { $0.id == "a" }!.refresh.lastSuccess
         await setFailQuota()
         await vm.refresh()
@@ -166,17 +176,23 @@ extension PerformanceRegressionTests {
         await vm.refresh()
         check(vm.cpaAccounts.count == 4 && vm.cpaError != nil, "Failed discovery erased accounts")
         await setReject()
-        do { try await vm.testAndEnableCPA(address: "https://other.invalid", key: "bad"); fatalError("Failed setup enabled") } catch {}
-        check(vm.source == .cpa && vm.cpaAccounts.count == 4, "Failed setup replaced working source")
+        do { try await vm.testAndSaveCPA(address: "https://other.invalid", key: "bad"); fatalError("Failed setup enabled") } catch {}
+        check(vm.isCPAConfigured == true && vm.cpaAccounts.count == 4, "Failed setup replaced the working connection")
         await CPAFixture.reset()
         await setEmpty()
-        try await vm.testAndEnableCPA(address: "https://empty.invalid", key: "key")
-        check(vm.source == .cpa && vm.cpaAccounts.isEmpty, "Empty authenticated instance must pass")
+        try await vm.testAndSaveCPA(address: "https://empty.invalid", key: "key")
+        check(vm.isCPAConfigured == true && vm.cpaAccounts.isEmpty, "Empty authenticated instance must pass")
         await CPAFixture.reset()
-        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        try await vm.testAndSaveCPA(address: connection.address, key: connection.key)
         let steady = await CPAFixture.requests.count
         await vm.refreshIfStaleForCPA()
         check(await CPAFixture.requests.count == steady, "CPA refreshed fresh data")
+        vm.ageCPAReadings(by: 130)
+        await vm.refreshIfStaleForCPA()
+        check(await CPAFixture.requests.count == steady, "Hidden panel used the visible refresh interval")
+        vm.usageVisibilityChanged(isVisible: true)
+        await vm.refreshIfStaleForCPA()
+        check(await CPAFixture.requests.count > steady, "Opening the panel did not refresh stale readings")
         let originalFiles = await CPAFixture.files
         await replaceFiles([originalFiles.first { $0["auth_index"] as? String == "b" }!])
         await vm.refresh()
@@ -184,6 +200,7 @@ extension PerformanceRegressionTests {
         await replaceFiles(originalFiles)
         await vm.refresh()
         check(vm.cpaAccounts.count == 4, "Successful discovery did not add accounts")
+        vm.usageVisibilityChanged(isVisible: false)
         vm.powerModeChanged(lowPower: true)
         check(vm.scheduledRefreshInterval == 1500, "CPA ignored hidden Low Power cadence")
         vm.usageVisibilityChanged(isVisible: true)
@@ -194,21 +211,21 @@ extension PerformanceRegressionTests {
         await setDelay()
         let late = Task { await vm.refresh() }
         try await Task.sleep(nanoseconds: 20_000_000)
-        await vm.useDirectSource()
+        try await vm.clearCPAConfiguration()
         await late.value
-        check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Late CPA response leaked into direct source")
+        check(vm.isCPAConfigured == false && vm.cpaAccounts.isEmpty, "Late discovery repopulated a cleared connection")
         await CPAFixture.reset()
-        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        try await vm.testAndSaveCPA(address: connection.address, key: connection.key)
         await setQuotaDelay()
         let waitForQuota = Task { await CPAFixture.waitForQuota() }
         await Task.yield()
         let quotaRefresh = Task { await vm.refresh() }
         await waitForQuota.value
-        await vm.useDirectSource()
+        try await vm.clearCPAConfiguration()
         await quotaRefresh.value
-        check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Late quota response leaked after source switch")
+        check(vm.isCPAConfigured == false && vm.cpaAccounts.isEmpty, "Late quota response repopulated a cleared connection")
         await CPAFixture.reset()
-        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        try await vm.testAndSaveCPA(address: connection.address, key: connection.key)
         await setDelay()
         let sleeping = Task { await vm.refresh() }
         try await Task.sleep(nanoseconds: 20_000_000)
@@ -217,13 +234,12 @@ extension PerformanceRegressionTests {
         check(vm.cpaAccounts.allSatisfy { $0.refresh.consecutiveFailures == 0 }, "Sleep became an account failure")
         vm.setSystemAsleep(false)
         await CPAFixture.reset()
-        await vm.useDirectSource()
-        check(vm.source == .direct && vm.cpaAccounts.isEmpty, "Direct switch retained CPA state")
-        check(await CredentialStorage.shared.cpaConnection?.address == connection.address, "Switch deleted configuration")
         try await vm.clearCPAConfiguration()
+        check(vm.isCPAConfigured == false && vm.cpaAccounts.isEmpty && vm.lastUpdated == nil, "Clear retained connection state")
         check(await CredentialStorage.shared.cpaConnection == nil, "Clear kept CPA key")
+        check(!vm.hasScheduledRefreshForTest, "Unconfigured app scheduled background polling")
         vm.stopAutoRefresh()
-        print("PASS: CPA discovery, negotiation, authentication, quota normalization, source isolation, stale data, cooldowns and empty setup")
+        print("PASS: CPA discovery, negotiation, authentication, quota normalization, connection isolation, stale data, cooldowns and empty setup")
     }
     @ProviderActor private static func setQuotaDelay() { CPAFixture.quotaDelay = 100_000_000 }
     @ProviderActor private static func setInventoryLimited() { CPAFixture.inventoryLimited = true }
@@ -553,11 +569,8 @@ extension PerformanceRegressionTests {
             preconditionFailure("Empty Antigravity groups must throw an error")
         } catch {}
 
-        // 6) ViewModel global hide-list persistence and Direct mode silence.
+        // 6) ViewModel global hide-list persistence.
         let vm = UsageViewModel(startAutomatically: false, makeCPAClient: { _ in client })
-        await FakeProviders.reset()
-        await vm.refresh()
-        check(!vm.availableProviders.contains(.antigravity), "Direct mode must stay silent for Antigravity")
 
         box.codeAssistResponse = (200, [:], #"{"currentTier":{"id":"free-tier"}}"#)
         box.files = [
@@ -571,7 +584,7 @@ extension PerformanceRegressionTests {
             ]}
             """)
         ]
-        try await vm.testAndEnableCPA(address: connection.address, key: connection.key)
+        try await vm.testAndSaveCPA(address: connection.address, key: connection.key)
         check(vm.discoveredAntigravityPools.map(\.id) == ["gemini-models", "claude-and-gpt-models"], "Discovered pools mismatch")
         check(vm.isAntigravityPoolVisible("gemini-models") && vm.isAntigravityPoolVisible("claude-and-gpt-models"), "New pools must be visible by default")
         vm.toggleAntigravityPool("gemini-models")
@@ -589,5 +602,15 @@ extension PerformanceRegressionTests {
 }
 
 extension UsageViewModel {
+    fileprivate var hasScheduledRefreshForTest: Bool { timer != nil }
+
+    fileprivate func ageCPAReadings(by age: TimeInterval) {
+        let date = Date().addingTimeInterval(-age)
+        discoveryState.lastAttempt = date
+        for index in cpaAccounts.indices {
+            cpaAccounts[index].refresh.lastAttempt = date
+        }
+    }
+
     fileprivate func refreshIfStaleForCPA() async { await requestRefresh() }
 }

@@ -42,15 +42,13 @@ struct UsagePanelCard: Identifiable {
     let detail: String
     let rows: [UsagePanelRow]
     var poolGroups: [UsagePanelPoolGroup] = []
-    /// An error or "Not authenticated", shown under the rows.
+    /// Account status or refresh error, shown under the rows.
     var message: String?
-    /// A button under the message, e.g. "How to authenticate Claude".
-    var actionTitle: String?
     var accounts: [CPAAccount] = []
     var hiddenPoolIDs: Set<String> = []
     var allPoolsHidden = false
     var bankedResets: BankedResets?
-    /// The source reads reset inventory, so a missing inventory means the read failed.
+    /// A missing inventory for this provider means the read failed.
     var tracksBankedResets = false
     var id: DisplayProvider { provider }
 
@@ -71,12 +69,10 @@ final class UsagePanelModel: ObservableObject {
     @Published var maximumContentHeight: CGFloat = 600
 
     var onResize: () -> Void = {}
-    var onAction: (DisplayProvider) -> Void = { _ in }
     var onRefresh: () -> Void = {}
     var onSettings: () -> Void = {}
     var onUpdate: () -> Void = {}
     var onSetup: () -> Void = {}
-    var onSetUpKimi: () -> Void = {}
     var onQuit: () -> Void = {}
 }
 
@@ -115,6 +111,8 @@ struct UsagePanelView: View {
         }
         .padding(8)
         .frame(width: 340)
+        // Measure the capped content at its ideal height even in an already taller window.
+        .fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 13))
         // SwiftUI applies model changes on a later run-loop pass, so the window
         // refits when the laid-out height changes rather than when the model does.
@@ -165,16 +163,13 @@ struct UsagePanelView: View {
 
     private var setup: some View {
         VStack(spacing: 8) {
-            Text("No providers signed in").fontWeight(.semibold)
-            Text("Sign in to Claude Code, Codex, Cursor, Kimi Code, z.ai, or Grok on this Mac and Usagebar picks it up.")
+            Text("Connect to CLIProxyAPI").fontWeight(.semibold)
+            Text("Enter your server address and management key to see account limits.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            HStack {
-                Button("Setup Usage Tracking") { model.onSetup() }
-                Button("Set Up Kimi Code…") { model.onSetUpKimi() }
-            }
-            .controlSize(.small)
+            Button("Open Connection Settings…") { model.onSetup() }
+                .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)
@@ -298,17 +293,11 @@ struct UsagePanelCardView: View {
             }
 
             if let message = card.message {
-                // "Not authenticated" has no rows and isn't an error.
                 let hasReadings = !card.rows.isEmpty || !card.poolGroups.isEmpty
                 Text(message)
                     .font(.system(size: 12))
                     .foregroundStyle(hasReadings ? Color(nsColor: .systemOrange) : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            if let actionTitle = card.actionTitle {
-                Button(actionTitle) { model.onAction(card.provider) }
-                    .buttonStyle(.link)
-                    .font(.system(size: 12))
             }
         }
         .padding(.vertical, 8)

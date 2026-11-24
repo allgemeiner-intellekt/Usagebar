@@ -111,6 +111,8 @@ struct UsagePanelView: View {
         }
         .padding(8)
         .frame(width: 340)
+        // Measure the capped content at its ideal height even in an already taller window.
+        .fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 13))
         // SwiftUI applies model changes on a later run-loop pass, so the window
         // refits when the laid-out height changes rather than when the model does.

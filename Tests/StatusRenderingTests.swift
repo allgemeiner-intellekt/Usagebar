@@ -10,7 +10,6 @@ extension AppDelegate {
         defer {
             panel.close()
             settingsWindow?.close()
-            NSStatusBar.system.removeStatusItem(statusItem)
         }
         viewModel.stopAutoRefresh()
         viewModel.showClaude = true
@@ -248,6 +247,7 @@ struct StatusRenderingTests {
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
         let delegate = AppDelegate(viewModel: model)
+        defer { delegate.removeRenderingStatusItem() }
         try delegate.verifyRendering(output: output)
         delegate.verifyCPARendering()
         print("PASS: setup/Claude/Codex panels, single-click toggle, fixed template icon, unified settings window, provider switches, visibility cadence")
@@ -263,6 +263,10 @@ extension UsageViewModel {
 }
 
 extension AppDelegate {
+    fileprivate func removeRenderingStatusItem() {
+        NSStatusBar.system.removeStatusItem(statusItem)
+    }
+
     fileprivate func verifyCPARendering() {
         viewModel.stopAutoRefresh()
         let reading = CPAReading(plan: "plus", windows: [CPAWindow(label: "5h", percent: 27, reset: nil)])
@@ -277,8 +281,8 @@ extension AppDelegate {
         let compact = panelCards()[0]
         precondition(compact.accounts.isEmpty && compact.rows.count == 1, "Single account lost compact style")
         viewModel.useCPAAccountFixtures(accounts)
-        isPanelOpen = true
-        updatePanel()
+        statusItem.button!.performClick(nil)
+        precondition(isPanelOpen && panel.isVisible, "Multi-account panel did not open")
         precondition(!panelModel.needsSetup && panelModel.emptyMessage == nil, "CPA panel gained source/setup clutter")
         for scheme: ColorScheme in [.light, .dark] {
             let host = NSHostingView(rootView: UsagePanelView(model: panelModel).environment(\.colorScheme, scheme))
@@ -288,16 +292,13 @@ extension AppDelegate {
         }
         // Shrinking content must shrink the open panel window, not leave a blank gap.
         // SwiftUI applies model changes on a later run-loop pass, so let it run.
-        panel.setFrame(NSRect(x: 0, y: 0, width: 340, height: 300), display: false)
-        panel.orderFrontRegardless()
-        panel.fitContent()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         let tallHeight = panel.frame.height
         viewModel.useCPAAccountFixtures([accounts[0]])
         updatePanel()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         let freshHeight = NSHostingView(rootView: UsagePanelView(model: panelModel)).fittingSize.height
-        precondition(panel.frame.height < tallHeight - 100, "Panel kept its taller height after content shrank")
+        precondition(panel.frame.height < tallHeight - 100, "Panel did not shrink from \(tallHeight) to near \(freshHeight); got \(panel.frame.height)")
         precondition(abs(panel.frame.height - freshHeight) < 1, "Panel height depends on earlier content")
 
         // Antigravity CPA rendering, card ordering, pool submenu filtering, and all-pools-hidden state.

@@ -1,6 +1,6 @@
 # Security policy
 
-Usagebar reads local provider credentials and sends authenticated requests to provider endpoints. Security reports are handled privately to reduce the risk of exposing tokens or user data.
+Usagebar authenticates to your CLIProxyAPI instance to read account and quota data. Security reports are handled privately to reduce the risk of exposing tokens or user data.
 
 ## Supported versions
 
@@ -20,9 +20,9 @@ Never send access tokens, refresh tokens, session keys, cookies, complete creden
 ## Security boundaries
 
 - Usagebar has no project-operated backend.
-- Provider credentials remain on the local Mac.
-- Browser-session credentials saved by Usagebar are encrypted at rest with AES-256-GCM and a device-derived key.
+- CLIProxyAPI manages provider credentials.
+- CLIProxyAPI connection settings saved by Usagebar are encrypted at rest with AES-256-GCM and a device-derived key.
 - Requests go directly to Anthropic, OpenAI, GitHub's release API, or a user-configured Codex base URL.
-- Users are responsible for the security of their macOS account and provider sessions.
+- Users are responsible for the security of their macOS account and CLIProxyAPI instance.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full credential and network model.

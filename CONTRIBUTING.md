@@ -27,7 +27,7 @@ The script stops an existing Usagebar process, builds a Debug app into `build/Co
 
 Use `make build` for a compile-only build.
 
-Run `./script/test_performance.sh` for deterministic scheduling, cancellation, credential-snapshot, timer-lifetime, panel interaction, fixed-icon, and visibility-driven refresh regression tests. Scheduling tests use fake providers; rendering tests compile the real AppKit renderers with fixture state. Both use an isolated preferences domain and never read provider credentials or contact provider APIs. Set `USAGEBAR_RENDER_OUTPUT=/absolute/path/preview.png` to save light/dark rendering previews.
+Run `./script/test_performance.sh` for deterministic CPA scheduling, cancellation, connection storage, panel interaction, fixed-icon, and visibility-driven refresh regression tests. Scheduling tests use a fixture CPA transport. Rendering tests compile the real AppKit renderers with fixture state. Both use an isolated preferences domain and run without real credentials or provider API requests. Set `USAGEBAR_RENDER_OUTPUT=/absolute/path/preview.png` to save light/dark rendering previews.
 
 For local performance measurements, use a Release build:
 
@@ -35,12 +35,12 @@ For local performance measurements, use a Release build:
 USAGEBAR_BUILD_CONFIGURATION=Release USAGEBAR_DISABLE_AUTO_UPDATE=1 ./script/build_and_run.sh --verify
 ```
 
-`USAGEBAR_DERIVED_DATA` can place build output outside a synced folder. `USAGEBAR_DISABLE_AUTO_UPDATE=1` applies only to the launched process and keeps local test builds from starting an automatic Homebrew update. Compare the same provider settings after initial credential discovery and requests have settled.
+`USAGEBAR_DERIVED_DATA` can place build output outside a synced folder. `USAGEBAR_DISABLE_AUTO_UPDATE=1` applies only to the launched process and keeps local test builds from starting an automatic Homebrew update. Compare the same provider settings after CPA account discovery and requests have settled.
 
 ## Project structure
 
 - `JustaUsageBar/Models`: usage-domain data types
-- `JustaUsageBar/Services`: credential discovery and provider clients
+- `JustaUsageBar/Services`: CPA client and encrypted connection storage
 - `JustaUsageBar/ViewModels`: refresh orchestration and preferences
 - `JustaUsageBar/Views`: AppKit and SwiftUI presentation
 - `JustaUsageBar/Assets.xcassets`: app and menu assets

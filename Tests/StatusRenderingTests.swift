@@ -3,21 +3,10 @@ import SwiftUI
 
 // The runner joins this file with the two controllers so these test extensions can
 // inspect private state without adding test-only accessors to the shipped app.
-extension UsageViewModel {
-    fileprivate func useRenderingFixtures(_ providers: Set<DisplayProvider>) {
-        availableProviders = providers
-        claudeAuthSource = .oauth
-        for provider in providers {
-            refreshStates[provider, default: .init()].succeeded(at: Date())
-        }
-    }
-}
-
 extension AppDelegate {
     fileprivate func verifyRendering(output: URL?) throws {
         setupStatusItem()
         settingsNavigation.loadCPAConnection = { nil }
-        settingsNavigation.loadClaudeCredentials = { ("", "") }
         defer {
             panel.close()
             settingsWindow?.close()
@@ -30,8 +19,20 @@ extension AppDelegate {
         viewModel.showKimi = false
         viewModel.showZai = false
         viewModel.showXai = false
-        viewModel.usageData = UsageData(fiveHourUsed: 23, weeklyUsed: 67, planName: "Max 20x")
-        viewModel.codexUsageData = CodexUsageData(primaryUsedPercent: 34, secondaryUsedPercent: 72)
+        let expiry = ISO8601Timestamp.date(from: "2026-11-06T15:59:00Z")!
+        let later = ISO8601Timestamp.date(from: "2026-11-30T15:59:00Z")!
+        let inventory = BankedResets(availableCount: 3, expirations: [.at(later), .at(expiry), .at(expiry)])
+        let claudeReading = CPAReading(plan: "Max 20x", windows: [
+            CPAWindow(label: "5h", percent: 23, reset: nil),
+            CPAWindow(label: "7d", percent: 67, reset: nil)
+        ], bankedResets: BankedResets(availableCount: 0, expirations: []))
+        let codexReading = CPAReading(plan: "Pro 200", windows: [
+            CPAWindow(label: "7d", percent: 34, reset: nil)
+        ], bankedResets: inventory)
+        let claude = CPAAccount(id: "claude", provider: .claude, identity: "Claude",
+                                disabled: false, expired: false, reading: claudeReading)
+        let codex = CPAAccount(id: "codex", provider: .codex, identity: "Codex",
+                               disabled: false, expired: false, reading: codexReading)
 
         let button = statusItem.button!
         let icon = button.image!
@@ -42,22 +43,29 @@ extension AppDelegate {
         let clickMask = NSEvent.EventTypeMask(rawValue: UInt64(button.sendAction(on: [.leftMouseUp, .rightMouseUp])))
         precondition(clickMask.contains(.leftMouseUp) && clickMask.contains(.rightMouseUp), "Both clicks must open the panel")
 
-        for providers: Set<DisplayProvider> in [[], [.claude], [.codex], [.claude, .codex]] {
-            viewModel.useRenderingFixtures(providers)
+        for accounts: [CPAAccount] in [[], [claude], [codex], [claude, codex]] {
+            viewModel.useCPAAccountFixtures(accounts, configured: !accounts.isEmpty)
 
             // Exercise the real button target/action, including setup and multi-provider states.
             button.performClick(nil)
             precondition(isPanelOpen && panel.isVisible, "Single click did not open the panel")
-            precondition(panelModel.needsSetup == providers.isEmpty, "Panel setup state is incorrect")
+            precondition(panelModel.needsSetup == accounts.isEmpty, "Panel setup state is incorrect")
             precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval)
-            precondition(panelModel.cards.map(\.provider) == [.claude, .codex], "Provider card order changed")
+            precondition(panelModel.cards.map(\.provider) == accounts.map(\.provider), "Provider card order changed")
             button.performClick(nil)
             precondition(!isPanelOpen && !panel.isVisible, "Second click did not close the panel")
             precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5)
             precondition(button.image === icon, "Provider availability changed the fixed icon")
         }
 
-        viewModel.useRenderingFixtures([.claude, .codex])
+        viewModel.useCPAAccountFixtures([], configured: false)
+        button.performClick(nil)
+        panelModel.onSetup()
+        precondition(settingsNavigation.selectedSection == .connection && settingsWindow?.isVisible == true,
+                     "Setup action must open CPA connection settings")
+        settingsWindow?.close()
+
+        viewModel.useCPAAccountFixtures([claude, codex])
         // Opening Settings from the panel (gear icon or Cmd+,) closes the panel,
         // presents the unified Settings window, and keeps the visible cadence until closed.
         button.performClick(nil)
@@ -67,13 +75,6 @@ extension AppDelegate {
         precondition(isSettingsOpen && settingsWindow?.isVisible == true, "Settings window did not open")
         precondition(viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval,
                      "Open Settings window did not preserve visible refresh cadence")
-
-        showSettings(section: .dataSource)
-        precondition(settingsNavigation.selectedSection == .dataSource, "Deep-linking to Data Source failed")
-        showSettings(section: .providers, setupSheet: .kimi)
-        precondition(settingsNavigation.selectedSection == .providers && settingsNavigation.activeSetupSheet == .kimi,
-                     "Deep-linking to Providers setup sheet failed")
-        settingsNavigation.activeSetupSheet = nil
 
         // Render every Settings section in both light and dark appearances without credential I/O.
         for section in SettingsSection.allCases {
@@ -105,8 +106,6 @@ extension AppDelegate {
         precondition(!isSettingsOpen && viewModel.scheduledRefreshInterval == viewModel.effectiveRefreshInterval * 5,
                      "Closing Settings did not restore hidden refresh cadence")
 
-        viewModel.usageData.fiveHourUsed = 99
-        viewModel.codexUsageData.primaryUsedPercent = 100
         availableUpdateVersion = "99.0"
         usageDataChanged()
         precondition(settingsNavigation.availableUpdateVersion == "99.0",
@@ -114,9 +113,6 @@ extension AppDelegate {
         precondition(button.image === icon && statusItem.length == NSStatusItem.squareLength,
                      "Usage, errors, or updates changed the fixed icon")
         availableUpdateVersion = nil
-        viewModel.usageData.fiveHourUsed = 23
-        viewModel.codexUsageData.primaryUsedPercent = 34
-
         // Keep the last authenticated provider enabled when using the Provider switches.
         viewModel.setProviderShown(false, for: .claude)
         precondition(!viewModel.showClaude && viewModel.showCodex)
@@ -125,13 +121,6 @@ extension AppDelegate {
         precondition(viewModel.showCodex, "Provider switches hid every authenticated provider")
         viewModel.setProviderShown(true, for: .claude)
 
-        let expiry = ISO8601Timestamp.date(from: "2026-11-06T15:59:00Z")!
-        let later = ISO8601Timestamp.date(from: "2026-11-30T15:59:00Z")!
-        let inventory = BankedResets(availableCount: 3, expirations: [.at(later), .at(expiry), .at(expiry)])
-        viewModel.codexUsageData = CodexUsageData(
-            planType: "pro", primaryUsedPercent: 34, primaryWindowSeconds: 604800,
-            bankedResets: inventory
-        )
         let codexCard = panelCards().first { $0.provider == .codex }!
         let claudeCard = panelCards().first { $0.provider == .claude }!
         precondition(codexCard.bankedResets == inventory && codexCard.showsBankedResets)
@@ -152,8 +141,6 @@ extension AppDelegate {
         unavailableCard.bankedResets = nil
         precondition(!unavailableCard.showsBankedResets && unavailableCard.resetInventoryUnavailable,
                      "Failed inventory must remain distinct from zero resets")
-        precondition(!claudeCard.tracksBankedResets && !claudeCard.resetInventoryUnavailable,
-                     "Direct Claude does not read reset grants and must not show them as unavailable")
         let claudeGrants = BankedResets(availableCount: 2, grants: [
             BankedResets.Grant(id: "nov", kind: .full, label: "", left: 1, total: 1, expiration: .at(expiry)),
             BankedResets.Grant(id: "refill", kind: .fable, label: "", left: 1, total: 1, expiration: .unknown)
@@ -257,7 +244,6 @@ struct StatusRenderingTests {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         try await testCPAStorage()
-        try await CodexAPIService.verifyBankedResets()
         verifyGlobalHotkey()
         let model = UsageViewModel(startAutomatically: false)
         let output = ProcessInfo.processInfo.environment["USAGEBAR_RENDER_OUTPUT"].map { URL(fileURLWithPath: $0) }
@@ -269,8 +255,8 @@ struct StatusRenderingTests {
 }
 
 extension UsageViewModel {
-    fileprivate func useCPAAccountFixtures(_ accounts: [CPAAccount]) {
-        source = .cpa
+    fileprivate func useCPAAccountFixtures(_ accounts: [CPAAccount], configured: Bool = true) {
+        isCPAConfigured = configured
         cpaAccounts = accounts
         availableProviders = Set(accounts.map(\.provider))
     }

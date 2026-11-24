@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/brand/usagebar-logo.png" alt="Usagebar" width="760">
 
-  <p><strong>Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok usage limits, directly in your macOS menu bar.</strong></p>
+  <p><strong>CLIProxyAPI account limits in your macOS menu bar.</strong></p>
   <p>A free, private, native Mac app that shows your 5-hour window, weekly cap, and when each one resets, without opening a browser.</p>
 
   <p>
@@ -24,30 +24,12 @@
   </p>
 </div>
 
-<p align="center">
-  <img src="images/demo.gif" alt="Usagebar showing Claude and Codex usage limits in the macOS menu bar" width="760">
-</p>
+## What Usagebar shows
 
-<p align="center">
-  <img src="images/panel.png" alt="Usagebar panel with Claude Code, Codex, Cursor, and z.ai usage limits, meters, and reset times" width="340">
-</p>
-
-The images above show the upstream interface. This personal fork uses a fixed menu-bar icon and removes provider selection from the cards.
-
-## Why Usagebar
-
-Usage limits matter most while you are working. Usagebar puts your Claude Code, Codex, and Cursor limits behind one fixed menu-bar icon. Click it once for a panel with every provider, a meter for each limit, and its reset time. Click again, click outside, or press Escape to close it.
-
-| Capability | What it gives you |
-| --- | --- |
-| Multiple providers | Track Claude Code, Codex, Kimi Code, Cursor, z.ai, and xAI (Grok Build) from one status item. |
-| Fixed menu-bar icon | A compact monochrome chart symbol opens the panel with either a left or right click. |
-| Usage panel | One card per provider with its plan, a meter per limit, and the time until it resets. Provider visibility switches are under the panel's **⋯** button. |
-| Codex banked resets | A compact count and nearest expiry. Click the count for all quantities and expiration dates in your Mac's time zone. Zero resets are hidden; failed requests show unavailable. Display only, with no redemption action. |
-| Claude banked resets (CPA source) | The same compact count, nearest expiry, and details for Claude reset grants read through CLIProxyAPI, including each grant's type and resets left. Display only. |
-| Local credential discovery | Reuse the Claude Code, Codex, Cursor, Kimi Code, z.ai, and Grok sign-ins already on the Mac. No API keys to paste. |
-| Privacy-first operation | No Usagebar account, telemetry, analytics, or intermediary backend. |
-| Lightweight runtime | A native Swift menu-bar app with no web runtime or bundled service. Background refresh slows while the panel is closed. |
+- Usage limits and reset times for Claude Code, Codex, Kimi Code, Grok Build and Antigravity accounts connected to CLIProxyAPI (CPA).
+- Banked reset counts and expiry details for Claude and Codex.
+- A compact card for a single account, with individual readings grouped by provider when CPA has multiple accounts.
+- Provider visibility and Antigravity pool filters in Settings → Providers.
 
 ## Installation
 
@@ -61,110 +43,36 @@ The app's download action opens this fork's builds. It does not install Homebrew
 
 ### Requirements
 
-- macOS 14 Sonoma or newer
-- A supported provider account
-- For zero-setup discovery, an authenticated Claude, Codex, or Kimi Code CLI session
+- macOS 14 Sonoma or newer.
+- A reachable CLIProxyAPI instance, its management key, and a supported account configured in CPA.
 
 ## Quick start
 
-1. Install and launch Usagebar.
-2. If you already use the provider CLIs, Usagebar discovers their local credentials automatically.
-3. Click the fixed menu-bar icon to open the usage panel. Settings are under the panel's **⋯** button. The panel shows cached readings immediately and refreshes stale data when opened.
+1. Install and launch Usagebar. Click the chart icon in the menu bar.
+2. Choose **Open Connection Settings…** and enter your CLIProxyAPI base address and management key.
+3. Click **Test & Save**. Reopen the panel to see account limits.
 
-If a provider is not detected, authenticate its CLI and ask Usagebar to rediscover credentials:
-
-```bash
-claude login
-codex login
-kimi login
-```
-
-Claude also supports an in-app browser-session fallback from **Setup Usage Tracking**.
-
-### If Claude shows "Session expired" or authentication fails
-
-Re-authenticate from the terminal — this is the reliable fix:
-
-1. Open Terminal and run `claude` (or `claude login`).
-2. Complete the login it prompts for.
-3. Click **Refresh** in Usagebar. Usage appears within a few seconds.
-
-Usagebar reads the credentials Claude Code writes locally and never rotates
-them itself, so a fresh terminal login is always picked up automatically.
-
-Cursor is discovered from the Cursor.app login (no extra setup). z.ai appears
-when a `Z_AI_API_KEY` is configured (environment variable or
-`~/.zai/config.json` with `{"apiKey": "..."}`).
-
-Kimi Code is discovered from `~/.kimi-code/credentials/kimi-code.json` after
-`kimi login`. Usagebar uses the same Kimi Code usage source as CodexBar and
-shows the weekly quota plus the rolling five-hour window. A Kimi Code API key
-or `kimi-auth` web token can also be saved from **Set Up Kimi Code…**.
-
-### Fewer menu-bar icons
-
-Since Usagebar already shows your providers' usage, their own menu-bar icons
-are redundant. The reliable way to remove them is each app's own setting:
-ChatGPT and Claude both offer a "show in menu bar" toggle in their
-preferences. (Usagebar deliberately does not try to hide other apps' icons
-itself: modern macOS — especially on notched MacBooks — no longer allows the
-lightweight divider trick that utilities like Dozer used, and doing it
-properly requires the private-API machinery of a dedicated tool like
-Bartender or Ice.)
-
-## Menu-bar controls
-
-Right-click the status item to open the usage panel; its **⋯** button holds these settings.
+Existing CPA configurations load automatically after upgrading. To change or clear the saved connection, open **Settings → Connection**. Manage provider sign-ins and expired accounts in CPA, then click **Refresh** in Usagebar.
 
 | Control | Behavior |
 | --- | --- |
-| Refresh (`⌘R`) | Rediscover credentials and fetch enabled providers, subject to server retry deadlines. |
-| Display mode | Show both windows, the five-hour window only, or the weekly window only. |
-| Provider visibility | Choose which detected providers appear, rotate, and refresh in the background. |
-| Switch cadence | Rotate providers automatically or switch manually with a left click. |
-| Launch at Login | Register or remove Usagebar as a macOS login item. |
-| Sign out | Reset the selected provider's Usagebar state; provider CLI sessions remain provider-owned. |
-
-## FAQ
-
-**How do I check my Claude Code usage limit on a Mac?**
-Install Usagebar and sign in to Claude Code as usual (`claude login`). The menu bar shows your five-hour window and weekly usage; the panel adds the Fable limit when your plan has one, and when each resets.
-
-**Can I see my Codex or ChatGPT rate limits?**
-Yes. Usagebar reads the Codex CLI sign-in (`codex login`) and shows the Codex primary and weekly windows with their reset times.
-
-**Does it work with Cursor and Grok Bot?**
-Yes. Cursor is picked up from the Cursor app's sign-in, and its weekly allowance is shared with Grok Bot, so the menu bar shows them together.
-
-**Is Usagebar free? Does it collect my data?**
-It's free and open source (MIT). There is no Usagebar account, no telemetry, and no server in between: usage travels directly between your Mac and each provider.
-
-**Is there a Windows or Linux version?**
-One is in development in [`desktop/`](https://github.com/betoxf/Usagebar/pull/28): the same panel in the system tray.
+| Left or right click the menu-bar icon | Open or close the usage panel. |
+| Refresh (`⌘R`) | Refresh the CPA account list and visible providers, subject to server cooldowns. |
+| Settings (`⌘,`) | Configure the CPA connection, provider visibility, refresh interval, launch at login and an optional global shortcut. |
 
 ## How it works
 
-Usagebar is a local status-bar client. It discovers credentials already stored by provider tools, requests usage directly from the provider, normalizes the response, and renders it with AppKit.
+Usagebar reads the CPA account list, requests quota data through CPA, and displays each account's limits and reset times. It refreshes every two minutes by default while the panel or Settings is open. With both closed, it refreshes five times less often. Low Power Mode slows polling, and sleep pauses it. Failed requests keep the last successful reading and retry with backoff.
 
-```text
-Claude CLI / Keychain ───┐
-Codex CLI auth.json ─────┼─> local credential discovery ─> provider API ─> menu-bar status
-Kimi Code credentials ───┘
-```
-
-The app refreshes the provider on screen every two minutes by default, or every five minutes in Low Power Mode. Enabled providers that are not on screen refresh five times less often, and as soon as they are shown or the menu opens; new sign-ins are picked up at that slower pace or when you click **Refresh**. Hidden providers stop polling and refresh when re-enabled. No connection stays open between refreshes. Background requests and automatic provider rotation pause while the display or Mac sleeps; stale usage refreshes on wake. Failed providers retry less frequently, respect server cooldowns, and keep the last successful reading. **Last Updates** in the menu shows how fresh each provider's data is.
-
-Credential discovery runs off the UI thread. Menu-bar rendering uses cached availability and reuses unchanged images; menus update when opened. OAuth access tokens are refreshed when supported by the provider session. See [Architecture](docs/ARCHITECTURE.md) for component boundaries, credential priority, and network destinations.
+See [CLIProxyAPI setup](docs/CPA.md) for connection details and supported readings, or [Architecture](docs/ARCHITECTURE.md) for refresh and persistence behavior.
 
 ## Privacy and security
 
-- Usage data travels directly between your Mac and the selected provider.
-- Usagebar does not operate a backend and does not collect telemetry or analytics.
-- CLI credential files are read locally and are never copied to a Usagebar service.
-- Claude browser-session credentials saved by the app are encrypted locally with AES-256-GCM using a device-derived key.
-- Provider APIs and authentication formats can change independently of Usagebar.
+- Usagebar only queries account and usage data through the CPA instance you configure. Account management, token refresh and reset redemption happen outside Usagebar.
+- The management key is stored in the existing device-encrypted `credentials.enc` file. Use HTTPS for remote CPA connections.
+- Usagebar has no project-operated backend or telemetry.
 
-Report suspected vulnerabilities privately according to the [security policy](SECURITY.md). Never include tokens, cookies, session keys, or unredacted credential files in an issue.
+Report suspected vulnerabilities privately according to the [security policy](SECURITY.md). Keep management keys and unredacted responses out of issues.
 
 ## Build from source
 
@@ -183,7 +91,7 @@ Create a distributable archive with `make release`. The clean archive is written
 ```text
 JustaUsageBar/       macOS application source and asset catalog
   Models/            provider-neutral usage models
-  Services/          credential discovery and provider API clients
+  Services/          CPA client and encrypted connection storage
   ViewModels/        refresh orchestration and persisted preferences
   Views/             status item, menus, setup, and settings UI
 assets/brand/        approved logo and standalone icon masters

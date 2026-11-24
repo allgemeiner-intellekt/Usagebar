@@ -18,20 +18,7 @@ final class CredentialStorage {
     private var cachedCredentials: Credentials?
 
     nonisolated struct Credentials: Codable {
-        var sessionKey: String?
-        var organizationId: String?
-        var claudeOAuth: ClaudeOAuthCredentials?
-        var kimiCredential: String?
         var cpaConnection: CPAConnection?
-    }
-
-    nonisolated struct ClaudeOAuthCredentials: Codable, Equatable {
-        var accessToken: String
-        var refreshToken: String?
-        var expiresAt: Date?
-        var scopes: [String]
-        var subscriptionType: String? = nil
-        var rateLimitTier: String? = nil
     }
 
     init(storageURL: URL? = nil, encryptionKey: SymmetricKey? = nil) {
@@ -42,7 +29,7 @@ final class CredentialStorage {
 
     var cpaConnection: CPAConnection? { cachedCredentials?.cpaConnection }
 
-    /// Propagate persistence failure so Test and enable cannot activate unsaved credentials.
+    /// Propagate persistence failure so connection setup cannot activate unsaved credentials.
     func saveCPAConnection(_ connection: CPAConnection?) throws {
         var credentials = cachedCredentials ?? Credentials()
         credentials.cpaConnection = connection
@@ -50,106 +37,6 @@ final class CredentialStorage {
         try data.write(to: credentialsFileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credentialsFileURL.path)
         cachedCredentials = credentials
-    }
-
-    // MARK: - Public API
-
-    var sessionKey: String? {
-        get { cachedCredentials?.sessionKey }
-        set {
-            if cachedCredentials == nil {
-                cachedCredentials = Credentials()
-            }
-            cachedCredentials?.sessionKey = newValue
-            saveCredentials()
-        }
-    }
-
-    var organizationId: String? {
-        get { cachedCredentials?.organizationId }
-        set {
-            if cachedCredentials == nil {
-                cachedCredentials = Credentials()
-            }
-            cachedCredentials?.organizationId = newValue
-            saveCredentials()
-        }
-    }
-
-    var hasCredentials: Bool {
-        sessionKey != nil && organizationId != nil
-    }
-
-    var claudeOAuthCredentials: ClaudeOAuthCredentials? {
-        get { cachedCredentials?.claudeOAuth }
-        set {
-            guard cachedCredentials?.claudeOAuth != newValue else { return }
-            if cachedCredentials == nil {
-                cachedCredentials = Credentials()
-            }
-            cachedCredentials?.claudeOAuth = newValue
-            saveCredentials()
-        }
-    }
-
-    var kimiCredential: String? {
-        get { cachedCredentials?.kimiCredential }
-        set {
-            if cachedCredentials == nil {
-                cachedCredentials = Credentials()
-            }
-            cachedCredentials?.kimiCredential = newValue
-            removeEmptyCredentialFileOrSave()
-        }
-    }
-
-    func setWebSession(sessionKey: String, organizationId: String) {
-        if cachedCredentials == nil { cachedCredentials = Credentials() }
-        cachedCredentials?.sessionKey = sessionKey
-        cachedCredentials?.organizationId = organizationId
-        saveCredentials()
-    }
-
-    func setKimiCredential(_ value: String) {
-        kimiCredential = value
-    }
-
-    func clearClaudeCredentials() {
-        guard cachedCredentials != nil else { return }
-        cachedCredentials?.sessionKey = nil
-        cachedCredentials?.organizationId = nil
-        cachedCredentials?.claudeOAuth = nil
-        removeEmptyCredentialFileOrSave()
-    }
-
-    func clearKimiCredential() {
-        guard cachedCredentials != nil else { return }
-        cachedCredentials?.kimiCredential = nil
-        removeEmptyCredentialFileOrSave()
-    }
-
-    func clearClaudeOAuthCredentials() {
-        guard cachedCredentials != nil else {
-            return
-        }
-
-        cachedCredentials?.claudeOAuth = nil
-
-        removeEmptyCredentialFileOrSave()
-    }
-
-    private func removeEmptyCredentialFileOrSave() {
-        let isEmpty = cachedCredentials?.sessionKey == nil &&
-            cachedCredentials?.organizationId == nil &&
-            cachedCredentials?.claudeOAuth == nil &&
-            cachedCredentials?.kimiCredential == nil &&
-            cachedCredentials?.cpaConnection == nil
-        if isEmpty {
-            cachedCredentials = nil
-            try? FileManager.default.removeItem(at: credentialsFileURL)
-        } else {
-            saveCredentials()
-        }
     }
 
     // MARK: - File Storage
@@ -178,21 +65,6 @@ final class CredentialStorage {
         } catch {
             print("Failed to load credentials: \(error)")
             cachedCredentials = nil
-        }
-    }
-
-    private func saveCredentials() {
-        guard let credentials = cachedCredentials else {
-            try? FileManager.default.removeItem(at: credentialsFileURL)
-            return
-        }
-
-        do {
-            let data = try JSONEncoder().encode(credentials)
-            let encryptedData = try encrypt(data)
-            try encryptedData.write(to: credentialsFileURL, options: .atomic)
-        } catch {
-            print("Failed to save credentials: \(error)")
         }
     }
 

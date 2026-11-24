@@ -12,46 +12,15 @@ import ServiceManagement
 final class UsageViewModel: ObservableObject {
     static let shared = UsageViewModel()
 
-    // MARK: - Claude Published Properties
-
-    @Published var usageData: UsageData = .placeholder
-    @Published var claudeAuthSource: ClaudeAuthSource = .none
-    @Published var claudeError: String?
-
-    // MARK: - Codex Published Properties
-
-    @Published var codexUsageData: CodexUsageData = .placeholder
-    @Published var codexError: String?
-
-    // MARK: - Cursor Published Properties
-
-    @Published var cursorUsageData: CursorUsageData = .placeholder
-    @Published var cursorError: String?
-
-    // MARK: - Zai Published Properties
-
-    @Published var zaiUsageData: ZaiUsageData = .placeholder
-    @Published var zaiError: String?
-
-    // MARK: - XAI / Grok Build Published Properties
-
-    @Published var xaiUsageData: XaiUsageData = .placeholder
-    @Published var xaiError: String?
-
-    // MARK: - Kimi Published Properties
-
-    @Published var kimiUsageData: KimiUsageData = .placeholder
-    @Published var kimiAuthSource: KimiAuthSource = .none
-    @Published var kimiError: String?
-
-    @Published private(set) var source: UsageSource = UsageSource(rawValue: UserDefaults.standard.string(forKey: "usageSource") ?? "") ?? .direct
+    @Published private(set) var isCPAConfigured: Bool?
     @Published private(set) var cpaAccounts: [CPAAccount] = []
     @Published private(set) var cpaError: String?
     private var cpaClient: CPAClient?
     private let makeCPAClient: @ProviderActor (CPAConnection) -> CPAClient
     private var discoveryState = ProviderRefreshState()
-    private var sourceGeneration = UUID()
+    private var connectionGeneration = UUID()
     private var configurationGeneration = UUID()
+    private var isSavingConnection = false
 
     // MARK: - General
 
@@ -60,7 +29,6 @@ final class UsageViewModel: ObservableObject {
     nonisolated private static let refreshIntervalDefaultsKey = "refreshInterval"
 
     @Published var isLoading: Bool = false
-    @Published var error: String?
     @Published var lastUpdated: Date?
     @Published var refreshInterval: TimeInterval = {
         if let saved = UserDefaults.standard.object(forKey: "refreshInterval") as? Double {
@@ -119,24 +87,18 @@ final class UsageViewModel: ObservableObject {
     // MARK: - Refresh scheduling
 
     @Published private(set) var availableProviders: Set<DisplayProvider> = []
-    @Published private(set) var hasSavedKimiCredential = false
-    @Published private(set) var refreshStates: [DisplayProvider: ProviderRefreshState] = [:]
     @Published private(set) var isBackgroundSuspended = false
 
     private var refreshTask: Task<Void, Never>?
-    private var credentialChangeTask: Task<Void, Never>?
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var pendingRefresh = false
     private var pendingManualRefresh = false
-    private var pendingRediscovery = false
     private var autoRefreshEnabled = true
     private var displayAsleep = false
     private var systemAsleep = false
     private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-    private var knownTargets: Set<DisplayProvider> = []
     private var isUsageVisible = false
-    private var lastCredentialCheck: Date?
 
     @AppStorage("hasLaunchedBefore") private var hasLaunchedBefore = false
 
@@ -213,22 +175,8 @@ final class UsageViewModel: ObservableObject {
         Set(DisplayProvider.displayOrder.filter { isProviderShown($0) })
     }
 
-    var refreshTargets: Set<DisplayProvider> {
-        UsageRefreshPolicy.targets(available: availableProviders, enabled: enabledProviders)
-    }
-
-    // UI availability checks are memory-only. Services own discovery and its caches.
-    var hasCredentials: Bool { !availableProviders.isEmpty }
-    var hasClaudeCredentials: Bool { availableProviders.contains(.claude) }
-    var hasCodexCredentials: Bool { availableProviders.contains(.codex) }
-    var hasAntigravityCredentials: Bool { availableProviders.contains(.antigravity) }
-    var hasCursorCredentials: Bool { availableProviders.contains(.cursor) }
-    var hasZaiCredentials: Bool { availableProviders.contains(.zai) }
-    var hasXaiCredentials: Bool { availableProviders.contains(.xai) }
-    var hasKimiCredentials: Bool { availableProviders.contains(.kimi) }
-
     var hasAntigravityAccounts: Bool {
-        source == .cpa && cpaAccounts.contains { $0.provider == .antigravity }
+        cpaAccounts.contains { $0.provider == .antigravity }
     }
 
     /// Unique Antigravity pools discovered across loaded CPA accounts, in encounter order.
@@ -276,45 +224,17 @@ final class UsageViewModel: ObservableObject {
     }
 
     func providerSettingsChanged() {
-        if source == .cpa {
-            Task { await requestRefresh() }
-            return
-        }
-        let targets = refreshTargets
-        let added = targets.subtracting(knownTargets)
-        knownTargets = targets
-        for provider in added {
-            // Re-enabling a provider bypasses local delay, but respects server cooldowns.
-            refreshStates[provider, default: .init()].lastAttempt = nil
-            refreshStates[provider, default: .init()].retryAt = refreshStates[provider]?.serverRetryAt
-        }
-        // A reading that just became visible may be older than its new cadence allows.
-        let now = Date()
-        let stale = targets.contains {
-            refreshStates[$0, default: .init()].isDue(at: now, interval: scheduledRefreshInterval, manual: false)
-        }
-        if !added.isEmpty || stale {
-            Task { await requestRefresh() }
-        } else {
-            scheduleNextRefresh()
-        }
+        Task { await requestRefresh() }
     }
 
     func refresh() async {
-        if let credentialChangeTask { await credentialChangeTask.value }
         await requestRefresh(manual: true)
     }
 
-    func rediscoverCredentialsAndRefresh() async {
-        if let credentialChangeTask { await credentialChangeTask.value }
-        await requestRefresh(manual: true, rediscover: true)
-    }
-
     /// Own every refresh task, including timer-triggered work, so suspension can cancel it.
-    private func requestRefresh(manual: Bool = false, rediscover: Bool = false) async {
+    private func requestRefresh(manual: Bool = false) async {
         pendingRefresh = true
         pendingManualRefresh = pendingManualRefresh || manual
-        pendingRediscovery = pendingRediscovery || rediscover
         if let refreshTask {
             await refreshTask.value
             return
@@ -330,169 +250,36 @@ final class UsageViewModel: ObservableObject {
             }
             while pendingRefresh && !Task.isCancelled && !isBackgroundSuspended && autoRefreshEnabled {
                 let manual = pendingManualRefresh
-                let rediscover = pendingRediscovery
                 pendingRefresh = false
                 pendingManualRefresh = false
-                pendingRediscovery = false
-                await performRefresh(manual: manual, rediscover: rediscover)
+                await performRefresh(manual: manual)
             }
         }
         refreshTask = task
         await task.value
     }
 
-    private func detectCredentials(forceReload: Bool) async {
-        if forceReload {
-            await ClaudeOAuthService.shared.clearCache()
-            await CodexAPIService.shared.clearCache()
-            await CursorAPIService.shared.clearCache()
-            await ZaiAPIService.shared.clearCache()
-            await XaiAPIService.shared.clearCache()
-            await KimiAPIService.shared.clearCache()
-        }
-        async let claude = ClaudeOAuthService.shared.hasCredentials
-        async let web = CredentialStorage.shared.hasCredentials
-        async let codex = CodexAPIService.shared.hasCredentials
-        async let cursor = CursorAPIService.shared.hasCredentials
-        async let zai = ZaiAPIService.shared.hasCredentials
-        async let xai = XaiAPIService.shared.hasCredentials
-        async let kimi = KimiAPIService.shared.detectedAuthSource
-        async let savedKimi = KimiAPIService.shared.hasSavedCredential
-        let (hasClaude, hasWeb, hasCodex, hasCursor, hasZai, hasXai, kimiSource, saved) =
-            await (claude, web, codex, cursor, zai, xai, kimi, savedKimi)
-        guard !Task.isCancelled else { return }
-        var available: Set<DisplayProvider> = []
-        if hasClaude || hasWeb { available.insert(.claude) }
-        if hasCodex { available.insert(.codex) }
-        if hasCursor { available.insert(.cursor) }
-        if hasZai { available.insert(.zai) }
-        if hasXai { available.insert(.xai) }
-        if kimiSource != .none { available.insert(.kimi) }
-        if available != availableProviders { availableProviders = available }
-        if saved != hasSavedKimiCredential { hasSavedKimiCredential = saved }
-        claudeAuthSource = hasClaude ? .oauth : (hasWeb ? .webSession : .none)
-        kimiAuthSource = kimiSource
-        knownTargets = refreshTargets
-        lastCredentialCheck = Date()
-    }
-
-    private func performRefresh(manual: Bool, rediscover: Bool) async {
+    private func performRefresh(manual: Bool) async {
         isLoading = true
         NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
         defer {
             isLoading = false
             NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
         }
-        if source == .cpa {
-            await refreshCPA(manual: manual)
-            return
-        }
-        // Sign-ins are rare, so look for them at the hidden cadence unless asked.
-        let checkInterval = UsageRefreshPolicy.interval(base: effectiveRefreshInterval, visible: false)
-        if manual || lastCredentialCheck.map({ Date().timeIntervalSince($0) >= checkInterval }) ?? true {
-            await detectCredentials(forceReload: rediscover)
-        }
-        guard !Task.isCancelled, !isBackgroundSuspended else { return }
-        let now = Date()
-        let due = refreshTargets.filter {
-            refreshStates[$0, default: .init()].isDue(at: now, interval: scheduledRefreshInterval, manual: manual)
-        }
-        for provider in due { refreshStates[provider, default: .init()].lastAttempt = now }
-        await withTaskGroup(of: Void.self) { group in
-            for provider in due {
-                group.addTask { await self.refreshProvider(provider) }
-            }
-        }
-        lastUpdated = refreshStates.values.compactMap(\.lastSuccess).max()
-    }
-
-    private func refreshProvider(_ provider: DisplayProvider) async {
-        do {
-            try Task.checkCancellation()
-            switch provider {
-            case .claude:
-                let data = try await ClaudeAPIService.shared.fetchUsage()
-                let source = await ClaudeAPIService.shared.lastAuthSource
-                try Task.checkCancellation()
-                usageData = data
-                claudeAuthSource = source
-            case .codex:
-                let data = try await CodexAPIService.shared.fetchUsage()
-                try Task.checkCancellation()
-                codexUsageData = data
-            case .antigravity:
-                // Direct Antigravity support is out of scope; Antigravity is CPA-only for now.
-                return
-            case .cursor:
-                let data = try await CursorAPIService.shared.fetchUsage()
-                try Task.checkCancellation()
-                cursorUsageData = data
-            case .zai:
-                let data = try await ZaiAPIService.shared.fetchUsage()
-                try Task.checkCancellation()
-                zaiUsageData = data
-            case .xai:
-                let data = try await XaiAPIService.shared.fetchUsage()
-                try Task.checkCancellation()
-                xaiUsageData = data
-            case .kimi:
-                let data = try await KimiAPIService.shared.fetchUsage()
-                let source = await KimiAPIService.shared.lastAuthSource
-                try Task.checkCancellation()
-                kimiUsageData = data
-                kimiAuthSource = source
-            }
-            setError(nil, for: provider)
-            refreshStates[provider, default: .init()].succeeded(at: Date())
-        } catch {
-            if Task.isCancelled || isRequestCancelled(error) {
-                // A cancelled request is neither a failed login nor a completed poll.
-                refreshStates[provider, default: .init()].lastAttempt = nil
-                return
-            }
-            let retryAfter = (error as? APIError)?.retryAfter ?? (error as? KimiServiceError)?.retryAfter
-            refreshStates[provider, default: .init()].failed(
-                at: Date(), interval: effectiveRefreshInterval, serverRetryAt: retryAfter
-            )
-            if provider == .claude, case APIError.unauthorized = error {
-                setError("Signed out — run `claude` in Terminal to log in", for: provider)
-            } else {
-                setError((error as? APIError)?.errorDescription ??
-                         (error as? KimiServiceError)?.errorDescription ?? error.localizedDescription, for: provider)
-            }
-        }
-    }
-
-    private func setError(_ message: String?, for provider: DisplayProvider) {
-        switch provider {
-        case .claude: claudeError = message
-        case .codex: codexError = message
-        case .antigravity: break
-        case .cursor: cursorError = message
-        case .zai: zaiError = message
-        case .xai: xaiError = message
-        case .kimi: kimiError = message
-        }
+        await refreshCPA(manual: manual)
     }
 
     private func scheduleNextRefresh() {
         timer?.invalidate()
         timer = nil
-        guard autoRefreshEnabled, !isBackgroundSuspended, refreshTask == nil else { return }
-        if source == .cpa {
-            let dates = [discoveryState.nextRefresh(interval: scheduledRefreshInterval)] + (cpaError == nil ? cpaAccounts.filter {
+        guard autoRefreshEnabled, !isBackgroundSuspended, refreshTask == nil, isCPAConfigured == true else { return }
+        var dates = [discoveryState.nextRefresh(interval: scheduledRefreshInterval)]
+        if cpaError == nil {
+            dates += cpaAccounts.filter {
                 !$0.disabled && !$0.expired && enabledProviders.contains($0.provider)
-            }.map { $0.refresh.nextRefresh(interval: scheduledRefreshInterval) } : [])
-            let delay = max(1, (dates.min() ?? Date().addingTimeInterval(scheduledRefreshInterval)).timeIntervalSinceNow)
-            timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in await self?.requestRefresh() }
-            }
-            timer?.tolerance = min(delay * 0.1, effectiveRefreshInterval * 0.1)
-            return
+            }.map { $0.refresh.nextRefresh(interval: scheduledRefreshInterval) }
         }
-        guard let next = refreshTargets.map({ refreshStates[$0, default: .init()].nextRefresh(interval: scheduledRefreshInterval) }).min()
-        else { return }
-        let delay = max(1, next.timeIntervalSinceNow)
+        let delay = max(1, (dates.min() ?? Date()).timeIntervalSinceNow)
         timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.requestRefresh() }
         }
@@ -575,22 +362,7 @@ final class UsageViewModel: ObservableObject {
         }
     }
 
-    func freshnessText(for provider: DisplayProvider, now: Date = Date()) -> String {
-        let state = refreshStates[provider, default: .init()]
-        let age: String
-        if let lastSuccess = state.lastSuccess {
-            let minutes = max(0, Int(now.timeIntervalSince(lastSuccess) / 60))
-            age = minutes == 0 ? "Updated just now" : "Updated \(minutes)m ago"
-        } else {
-            age = "No successful update yet"
-        }
-        if let retryAt = state.retryAt, retryAt > now {
-            return "\(age) · retry in \(max(1, Int(ceil(retryAt.timeIntervalSince(now) / 60))))m"
-        }
-        return age
-    }
-
-    func testAndEnableCPA(address: String, key: String) async throws {
+    func testAndSaveCPA(address: String, key: String) async throws {
         let operation = UUID()
         configurationGeneration = operation
         let connection = try CPAConnection(address: address, key: key)
@@ -598,70 +370,67 @@ final class UsageViewModel: ObservableObject {
         _ = try await client.accounts() // An authenticated empty instance is valid.
         try Task.checkCancellation()
         guard configurationGeneration == operation else { throw CancellationError() }
-        try await CredentialStorage.shared.saveCPAConnection(connection)
-        guard configurationGeneration == operation else { throw CancellationError() }
-        await selectSource(.cpa, client: client)
-    }
-
-    func useDirectSource() async {
-        configurationGeneration = UUID()
-        await selectSource(.direct)
-    }
-
-    func useSavedCPA() async throws {
-        guard let connection = await CredentialStorage.shared.cpaConnection else {
-            throw CPAError.message("Configure a CPA connection first.")
-        }
-        try await testAndEnableCPA(address: connection.address, key: connection.key)
+        try await saveCPAConnection(connection, client: client)
     }
 
     func clearCPAConfiguration() async throws {
         configurationGeneration = UUID()
-        try await CredentialStorage.shared.saveCPAConnection(nil)
-        await selectSource(.direct)
+        try await saveCPAConnection(nil, client: nil)
     }
 
-    private func selectSource(_ newSource: UsageSource, client: CPAClient? = nil) async {
+    private func saveCPAConnection(_ connection: CPAConnection?, client: CPAClient?) async throws {
+        guard !isSavingConnection else { throw CPAError.message("A connection change is already in progress.") }
+        isSavingConnection = true
+        defer { isSavingConnection = false }
+        try await CredentialStorage.shared.saveCPAConnection(connection)
+        await replaceCPAClient(with: client)
+    }
+
+    private func replaceCPAClient(with client: CPAClient?) async {
         let generation = UUID()
-        sourceGeneration = generation
+        connectionGeneration = generation
+        timer?.invalidate()
+        timer = nil
         refreshTask?.cancel()
-        if let refreshTask { await refreshTask.value }
-        guard generation == sourceGeneration else { return }
-        source = newSource
-        UserDefaults.standard.set(newSource.rawValue, forKey: "usageSource")
         cpaClient = client
+        isCPAConfigured = client != nil
         cpaAccounts = []
         cpaError = nil
         discoveryState = .init()
         availableProviders = []
-        refreshStates = [:]
-        lastCredentialCheck = nil
         lastUpdated = nil
-        knownTargets = []
-        usageData = .placeholder; codexUsageData = .placeholder
-        cursorUsageData = .placeholder; kimiUsageData = .placeholder
-        zaiUsageData = .placeholder; xaiUsageData = .placeholder
-        claudeAuthSource = .none; kimiAuthSource = .none
-        for provider in DisplayProvider.displayOrder { setError(nil, for: provider) }
-        await requestRefresh(manual: true)
+        NotificationCenter.default.post(name: NSNotification.Name("UsageDataChanged"), object: nil)
+        if let refreshTask { await refreshTask.value }
+        guard generation == connectionGeneration else { return }
+        if client != nil { await requestRefresh(manual: true) }
     }
 
     private func refreshCPA(manual: Bool) async {
-        let generation = sourceGeneration
-        if cpaClient == nil, let connection = await CredentialStorage.shared.cpaConnection {
-            cpaClient = await makeCPAClient(connection)
+        let generation = connectionGeneration
+        if isCPAConfigured == nil {
+            let connection = await CredentialStorage.shared.cpaConnection
+            let client: CPAClient?
+            if let connection {
+                client = await makeCPAClient(connection)
+            } else {
+                client = nil
+            }
+            guard !Task.isCancelled, generation == connectionGeneration else { return }
+            cpaClient = client
+            isCPAConfigured = client != nil
         }
-        guard !Task.isCancelled, generation == sourceGeneration else { return }
-        guard let client = cpaClient else {
-            cpaError = "Configure a CPA connection in Settings → Data Source."
-            discoveryState.lastAttempt = Date()
-            return
-        }
+        guard let client = cpaClient else { return }
         if discoveryState.isDue(at: Date(), interval: scheduledRefreshInterval, manual: manual) {
+            let previousAttempt = discoveryState.lastAttempt
             discoveryState.lastAttempt = Date()
+            defer {
+                if Task.isCancelled && generation == connectionGeneration {
+                    discoveryState.lastAttempt = previousAttempt
+                }
+            }
             do {
                 let discovered = try await client.accounts()
-                guard !Task.isCancelled, generation == sourceGeneration else { return }
+                guard !Task.isCancelled, generation == connectionGeneration else { return }
                 let previous = Dictionary(uniqueKeysWithValues: cpaAccounts.map { ($0.id, $0) })
                 cpaAccounts = discovered.map { account in
                     var account = account
@@ -676,7 +445,7 @@ final class UsageViewModel: ObservableObject {
                 cpaError = nil
                 discoveryState.succeeded(at: Date())
             } catch {
-                guard !Task.isCancelled, generation == sourceGeneration else { return }
+                guard !Task.isCancelled, generation == connectionGeneration else { return }
                 cpaError = (error as? CPAError)?.errorDescription ?? "Could not connect to CPA. Check its address and transport settings."
                 discoveryState.failed(at: Date(), interval: effectiveRefreshInterval, serverRetryAt: (error as? CPAError)?.retryAfter)
                 // Rejected management credentials must not be resubmitted per account.
@@ -697,7 +466,7 @@ final class UsageViewModel: ObservableObject {
                 }
             }
             for await (id, reading, error, retry) in group {
-                guard !Task.isCancelled, generation == sourceGeneration,
+                guard !Task.isCancelled, generation == connectionGeneration,
                       let index = cpaAccounts.firstIndex(where: { $0.id == id }) else { continue }
                 if let reading {
                     cpaAccounts[index].reading = reading
@@ -709,7 +478,7 @@ final class UsageViewModel: ObservableObject {
                 }
             }
         }
-        guard generation == sourceGeneration else { return }
+        guard generation == connectionGeneration else { return }
         if Task.isCancelled {
             for account in due {
                 if let index = cpaAccounts.firstIndex(where: { $0.id == account.id }) {
@@ -719,83 +488,5 @@ final class UsageViewModel: ObservableObject {
             return
         }
         lastUpdated = cpaAccounts.compactMap { $0.refresh.lastSuccess }.max()
-    }
-
-    // MARK: - Credential changes
-
-    private func changeCredentials(_ change: @escaping @ProviderActor () -> Void, reset: @escaping @MainActor () -> Void = {}) {
-        let previous = credentialChangeTask
-        credentialChangeTask = Task {
-            if let previous { await previous.value }
-            stopAutoRefresh()
-            if let refreshTask { await refreshTask.value }
-            await change()
-            reset()
-            autoRefreshEnabled = true
-            await requestRefresh(manual: true, rediscover: true)
-        }
-    }
-
-    func saveCredentials(sessionKey: String, organizationId: String) {
-        if sessionKey == "__oauth__" || sessionKey.hasPrefix("__detected__") {
-            Task { await rediscoverCredentialsAndRefresh() }
-            return
-        }
-        changeCredentials {
-            CredentialStorage.shared.setWebSession(
-                sessionKey: sessionKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                organizationId: organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-        }
-    }
-
-    func clearClaudeCredentials() {
-        changeCredentials({
-            CredentialStorage.shared.clearClaudeCredentials()
-            ClaudeOAuthService.shared.clearPersistedCredentials()
-        }, reset: {
-            self.usageData = .placeholder
-            self.claudeError = nil
-            self.refreshStates[.claude] = nil
-        })
-    }
-
-    func clearCodexCredentials() {
-        changeCredentials({ CodexAPIService.shared.clearCache() }, reset: {
-            self.codexUsageData = .placeholder
-            self.codexError = nil
-            self.refreshStates[.codex] = nil
-        })
-    }
-
-    func saveKimiCredential(_ credential: String) {
-        changeCredentials {
-            CredentialStorage.shared.setKimiCredential(credential.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-    }
-
-    func clearKimiCredential() {
-        changeCredentials({
-            CredentialStorage.shared.clearKimiCredential()
-            KimiAPIService.shared.clearCache()
-        }, reset: {
-            self.kimiUsageData = .placeholder
-            self.kimiError = nil
-            self.refreshStates[.kimi] = nil
-        })
-    }
-
-    // MARK: - Display Helpers
-
-    var statusText: String {
-        if !hasCredentials { return "Setup" }
-        if isLoading && lastUpdated == nil { return "..." }
-        return usageData.menuBarText
-    }
-
-    var statusColor: NSColor {
-        guard hasCredentials else { return .secondaryLabelColor }
-        let pct = usageData.fiveHourPercentage
-        return pct < 50 ? .systemGreen : (pct < 80 ? .systemYellow : .systemRed)
     }
 }

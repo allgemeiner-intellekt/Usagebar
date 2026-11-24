@@ -1,9 +1,7 @@
 import Foundation
 
-// Joined with CodexAPIService by the runner. All transport and credentials are
-// fixtures; these checks cannot read a real credential or contact a provider.
-extension CodexAPIService {
-    static func verifyBankedResets() async throws {
+extension PerformanceRegressionTests {
+    static func testCodexBankedResetParsing() throws {
         let inventory = Data(#"""
         {"available_count":4,"credits":[
           {"status":"available","expires_at":"2026-12-01T00:00:00Z"},
@@ -31,60 +29,5 @@ extension CodexAPIService {
                 preconditionFailure("Invalid reset counts must fail instead of becoming zero")
             } catch {}
         }
-
-        let usagePayload = Data(#"{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":34,"limit_window_seconds":604800}},"rate_limit_reset_credits":{"available_count":3}}"#.utf8)
-        for path in ["/backend-api/wham/usage", "/api/codex/usage"] {
-            let service = CodexAPIService(sendRequest: { request in
-                precondition(request.httpMethod == "GET", "Inventory must only be read")
-                precondition(request.url?.path == path.replacingOccurrences(of: "/usage", with: "/rate-limit-reset-credits"))
-                precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
-                precondition(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "fixture-account")
-                return (inventory, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            })
-            var request = URLRequest(url: URL(string: "https://example.test\(path)")!)
-            request.httpMethod = "GET"
-            request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
-            request.setValue("fixture-account", forHTTPHeaderField: "ChatGPT-Account-Id")
-            let usage = try service.parseCodexUsageResponse(usagePayload)
-            let result = try await service.fetchResetInventory(usage: usage, request: request)
-            precondition(result.primaryUsedPercent == 34 && result.primaryIsWeekly)
-            precondition(result.bankedResets == parsed, "Detailed inventory must override the usage summary")
-        }
-
-        let request = URLRequest(url: URL(string: "https://example.test/backend-api/wham/usage")!)
-        for status in [401, 403, 404, 500] {
-            let service = CodexAPIService(sendRequest: { request in
-                (Data(), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
-            })
-            let result = try await service.fetchResetInventory(usage: service.parseCodexUsageResponse(usagePayload), request: request)
-            precondition(result.primaryUsedPercent == 34 && result.bankedResets?.availableCount == 3)
-            precondition(result.bankedResets?.expirations == nil, "Failed inventory must not fabricate expiry dates")
-        }
-        var attempts = 0
-        let throttled = CodexAPIService(sendRequest: { request in
-            attempts += 1
-            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: ["Retry-After": "3600"])!)
-        })
-        let usage = try throttled.parseCodexUsageResponse(usagePayload)
-        _ = try await throttled.fetchResetInventory(usage: usage, request: request)
-        _ = try await throttled.fetchResetInventory(usage: usage, request: request)
-        throttled.clearCache()
-        _ = try await throttled.fetchResetInventory(usage: usage, request: request)
-        precondition(attempts == 1, "Manual refresh must preserve inventory server cooldown")
-        let malformed = CodexAPIService(sendRequest: { request in
-            (Data(#"{"available_count":3}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-        })
-        let fallback = try await malformed.fetchResetInventory(usage: usage, request: request)
-        precondition(fallback.bankedResets?.availableCount == 3 && fallback.bankedResets?.expirations == nil)
-        let unavailable = CodexAPIService(sendRequest: { _ in throw URLError(.notConnectedToInternet) })
-        let noSummary = CodexUsageData(primaryUsedPercent: 34)
-        let unknownResult = try await unavailable.fetchResetInventory(usage: noSummary, request: request)
-        precondition(unknownResult.primaryUsedPercent == 34 && unknownResult.bankedResets == nil)
-        let cancelled = CodexAPIService(sendRequest: { _ in throw CancellationError() })
-        do {
-            _ = try await cancelled.fetchResetInventory(usage: usage, request: request)
-            preconditionFailure("Inventory cancellation must propagate")
-        } catch is CancellationError {}
-        print("PASS: banked reset inventory, grouping, malformed fields, GET-only transport, usage fallback, cooldown, cancellation")
     }
 }

@@ -42,15 +42,6 @@ nonisolated enum UsageRefreshPolicy {
     static func interval(base: TimeInterval, visible: Bool) -> TimeInterval {
         visible ? base : base * 5
     }
-
-    static func targets(
-        available: Set<DisplayProvider>, enabled: Set<DisplayProvider>
-    ) -> Set<DisplayProvider> {
-        let shown = available.intersection(enabled)
-        if !shown.isEmpty { return shown }
-        // Recover from externally edited preferences with one authenticated provider.
-        return DisplayProvider.displayOrder.first(where: available.contains).map { [$0] } ?? []
-    }
 }
 
 /// Provider timestamps, with or without fractional seconds. Creating a formatter

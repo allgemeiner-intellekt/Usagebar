@@ -250,8 +250,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func updatePanel() {
         guard isPanelOpen else { return }
         panelModel.maximumContentHeight = max(100, (statusItem.button?.window?.screen?.visibleFrame.height ?? 768) - 120)
-        panelModel.needsSetup = viewModel.source == .direct && !viewModel.hasCredentials
-        panelModel.emptyMessage = viewModel.source == .cpa ? (viewModel.cpaError ?? (viewModel.cpaAccounts.isEmpty ? "No supported accounts. Add accounts in CPA, then refresh." : nil)) : nil
+        panelModel.needsSetup = viewModel.isCPAConfigured == false
+        panelModel.emptyMessage = viewModel.cpaError
+        if viewModel.cpaError == nil && viewModel.cpaAccounts.isEmpty {
+            if viewModel.isCPAConfigured == nil || viewModel.isLoading {
+                panelModel.emptyMessage = "Loading CLIProxyAPI accounts…"
+            } else if viewModel.isCPAConfigured == true {
+                panelModel.emptyMessage = "No supported accounts. Add accounts in CLIProxyAPI, then refresh."
+            }
+        }
         panelModel.cards = panelCards()
         panelModel.updateVersion = availableUpdateVersion
         panelModel.isRefreshing = viewModel.isLoading
@@ -265,154 +272,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func panelCards() -> [UsagePanelCard] {
-        if viewModel.source == .cpa {
-            return DisplayProvider.displayOrder.compactMap { provider in
-                let shown: Bool = switch provider {
-                case .claude: viewModel.showClaude
-                case .codex: viewModel.showCodex
-                case .antigravity: viewModel.showAntigravity
-                case .cursor: viewModel.showCursor
-                case .kimi: viewModel.showKimi
-                case .zai: viewModel.showZai
-                case .xai: viewModel.showXai
+        return DisplayProvider.displayOrder.compactMap { provider in
+            let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
+            guard viewModel.isProviderShown(provider), !accounts.isEmpty else { return nil }
+            let hiddenPoolIDs = provider == .antigravity ? viewModel.hiddenAntigravityPoolIDs : []
+            if accounts.count == 1, let account = accounts.first {
+                let allPools = account.reading?.poolGroups ?? []
+                let visiblePools = allPools.filter { !hiddenPoolIDs.contains($0.id) }.map { group in
+                    UsagePanelPoolGroup(
+                        id: group.id,
+                        label: group.label,
+                        description: group.description,
+                        rows: group.windows.map {
+                            UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
+                                          dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
+                        }
+                    )
                 }
-                let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
-                guard shown, !accounts.isEmpty else { return nil }
-                let hiddenPoolIDs = provider == .antigravity ? viewModel.hiddenAntigravityPoolIDs : []
-                if accounts.count == 1, let account = accounts.first {
-                    let allPools = account.reading?.poolGroups ?? []
-                    let visiblePools = allPools.filter { !hiddenPoolIDs.contains($0.id) }.map { group in
-                        UsagePanelPoolGroup(
-                            id: group.id,
-                            label: group.label,
-                            description: group.description,
-                            rows: group.windows.map {
-                                UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
-                                              dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
-                            }
-                        )
-                    }
-                    return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
-                        UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
-                                      dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
-                    }, poolGroups: visiblePools, message: cpaAccountMessage(account),
-                    hiddenPoolIDs: hiddenPoolIDs, allPoolsHidden: !allPools.isEmpty && visiblePools.isEmpty,
-                    bankedResets: account.reading?.bankedResets,
-                    tracksBankedResets: account.provider == .codex || account.provider == .claude)
-                }
-                return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts, hiddenPoolIDs: hiddenPoolIDs)
+                return UsagePanelCard(provider: provider, detail: account.reading?.plan ?? "", rows: (account.reading?.windows ?? []).map {
+                    UsagePanelRow(id: $0.id, label: $0.label, percent: $0.percent, resetText: $0.resetText,
+                                  dimmed: $0.blockedByOuterLimit, helpText: $0.detail)
+                }, poolGroups: visiblePools, message: cpaAccountMessage(account),
+                hiddenPoolIDs: hiddenPoolIDs, allPoolsHidden: !allPools.isEmpty && visiblePools.isEmpty,
+                bankedResets: account.reading?.bankedResets,
+                tracksBankedResets: account.provider == .codex || account.provider == .claude)
             }
+            return UsagePanelCard(provider: provider, detail: "", rows: [], accounts: accounts, hiddenPoolIDs: hiddenPoolIDs)
         }
-        var cards: [UsagePanelCard] = []
-
-        if viewModel.showClaude {
-            let usage = viewModel.usageData
-            let detail = usage.planName
-            if viewModel.hasClaudeCredentials {
-                var rows = [
-                    UsagePanelRow(label: "5h", percent: usage.fiveHourUsed, resetText: usage.timeUntilFiveHourReset),
-                    UsagePanelRow(label: "7d", percent: usage.weeklyUsed, resetText: usage.timeUntilWeeklyReset)
-                ]
-                if usage.hasFableData {
-                    rows.append(UsagePanelRow(label: "Fable", percent: usage.fableUsed ?? 0, resetText: usage.timeUntilFableReset))
-                }
-                let error = viewModel.claudeError
-                cards.append(UsagePanelCard(
-                    provider: .claude, detail: detail, rows: rows, message: error,
-                    actionTitle: error != nil && shouldPromptClaudeAuthentication ? "How to authenticate Claude" : nil
-                ))
-            } else {
-                cards.append(UsagePanelCard(
-                    provider: .claude, detail: detail, rows: [],
-                    message: "Not authenticated", actionTitle: "How to authenticate Claude"
-                ))
-            }
-        }
-
-        if viewModel.showCodex {
-            let codex = viewModel.codexUsageData
-            let detail = PlanNames.codex(codex.planType)
-            if viewModel.hasCodexCredentials {
-                var rows = [UsagePanelRow(
-                    label: codex.primaryIsWeekly ? "7d" : codex.primaryWindowLabel,
-                    percent: codex.primaryUsedPercent,
-                    resetText: codex.timeUntilPrimaryReset
-                )]
-                if !codex.primaryIsWeekly, codex.secondaryUsedPercent > 0 || codex.secondaryResetAt != nil {
-                    rows.append(UsagePanelRow(label: "7d", percent: codex.secondaryUsedPercent, resetText: codex.timeUntilSecondaryReset))
-                }
-                let error = viewModel.codexError
-                cards.append(UsagePanelCard(
-                    provider: .codex, detail: detail, rows: rows, message: error,
-                    actionTitle: error != nil && shouldPromptCodexAuthentication ? "How to authenticate Codex" : nil,
-                    bankedResets: codex.bankedResets,
-                    tracksBankedResets: true
-                ))
-            } else {
-                cards.append(UsagePanelCard(
-                    provider: .codex, detail: detail, rows: [],
-                    message: "Not authenticated", actionTitle: "How to authenticate Codex"
-                ))
-            }
-        }
-
-        if viewModel.hasCursorCredentials && viewModel.showCursor {
-            let cursor = viewModel.cursorUsageData
-            cards.append(UsagePanelCard(
-                provider: .cursor,
-                detail: cursor.planName != "unknown" ? cursor.planName.capitalized : "",
-                rows: [UsagePanelRow(label: cursor.windowLabel, percent: cursor.usedPercent, resetText: cursor.timeUntilReset)],
-                message: viewModel.cursorError
-            ))
-        }
-
-        if viewModel.hasKimiCredentials && viewModel.showKimi {
-            let kimi = viewModel.kimiUsageData
-            var rows: [UsagePanelRow] = []
-            if let fiveHour = kimi.fiveHourUsedPercent {
-                rows.append(UsagePanelRow(label: "5h", percent: fiveHour, resetText: kimi.timeUntilFiveHourReset))
-            }
-            rows.append(UsagePanelRow(label: "7d", percent: kimi.weeklyUsedPercent, resetText: kimi.timeUntilWeeklyReset))
-            let error = viewModel.kimiError
-            cards.append(UsagePanelCard(
-                provider: .kimi, detail: kimi.planName, rows: rows,
-                message: error, actionTitle: error != nil ? "Kimi Code Setup…" : nil
-            ))
-        }
-
-        if viewModel.hasZaiCredentials && viewModel.showZai {
-            let zai = viewModel.zaiUsageData
-            cards.append(UsagePanelCard(
-                provider: .zai,
-                detail: zai.planName != "unknown" ? zai.planName.capitalized : "",
-                rows: [UsagePanelRow(label: zai.windowLabel, percent: zai.usedPercent, resetText: zai.timeUntilReset)],
-                message: viewModel.zaiError
-            ))
-        }
-
-        if viewModel.hasXaiCredentials && viewModel.showXai {
-            let xai = viewModel.xaiUsageData
-            cards.append(UsagePanelCard(
-                provider: .xai,
-                detail: xai.planName != "unknown" ? xai.planName : "",
-                rows: [UsagePanelRow(label: "7d", percent: xai.primaryUsedPercent, resetText: xai.timeUntilWeeklyReset)],
-                message: viewModel.xaiError
-            ))
-        }
-        return cards
     }
 
     private func configurePanelActions() {
         panelModel.onResize = { [weak self] in
             DispatchQueue.main.async { self?.panel.fitContent() }
-        }
-        panelModel.onAction = { [weak self] provider in
-            switch provider {
-            case .claude: self?.showSettings(section: .providers, setupSheet: .claude)
-            case .codex: self?.showSettings(section: .providers, setupSheet: .codex)
-            case .kimi: self?.showSettings(section: .providers, setupSheet: .kimi)
-            case .antigravity, .cursor, .zai, .xai: break
-            }
         }
         panelModel.onRefresh = { [weak self] in
             self?.panelModel.isRefreshing = true
@@ -423,10 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         panelModel.onUpdate = { [weak self] in self?.checkForUpdates() }
         panelModel.onSetup = { [weak self] in
-            self?.showSettings(section: .providers)
-        }
-        panelModel.onSetUpKimi = { [weak self] in
-            self?.showSettings(section: .providers, setupSheet: .kimi)
+            self?.showSettings(section: .connection)
         }
         panelModel.onQuit = { NSApp.terminate(nil) }
     }
@@ -449,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         togglePanel()
     }
 
-    func showSettings(section: SettingsSection? = nil, setupSheet: ProviderSetupSheet? = nil) {
+    func showSettings(section: SettingsSection? = nil) {
         previousAppBeforeHotkeyPanel = nil
         if panel.isVisible {
             panel.close()
@@ -458,7 +346,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let section {
             settingsNavigation.selectedSection = section
         }
-        settingsNavigation.activeSetupSheet = setupSheet
 
         if settingsWindow == nil {
             let window = NSWindow(
@@ -503,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func refreshData() {
         Task {
-            await viewModel.rediscoverCredentialsAndRefresh()
+            await viewModel.refresh()
         }
     }
 
@@ -987,15 +874,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         return trimmedLines.prefix(6).joined(separator: "\n")
-    }
-
-    // MARK: - Helpers
-
-    private var shouldPromptClaudeAuthentication: Bool {
-        !viewModel.hasClaudeCredentials || viewModel.claudeError != nil
-    }
-
-    private var shouldPromptCodexAuthentication: Bool {
-        !viewModel.hasCodexCredentials || viewModel.codexError == APIError.unauthorized.errorDescription
     }
 }

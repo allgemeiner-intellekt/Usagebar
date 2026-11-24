@@ -10,7 +10,7 @@ import SwiftUI
 nonisolated enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case general
     case providers
-    case dataSource
+    case connection
     case about
 
     var id: Self { self }
@@ -19,7 +19,7 @@ nonisolated enum SettingsSection: String, CaseIterable, Identifiable, Hashable, 
         switch self {
         case .general: "General"
         case .providers: "Providers"
-        case .dataSource: "Data Source"
+        case .connection: "Connection"
         case .about: "About"
         }
     }
@@ -28,24 +28,15 @@ nonisolated enum SettingsSection: String, CaseIterable, Identifiable, Hashable, 
         switch self {
         case .general: "gearshape"
         case .providers: "square.grid.2x2"
-        case .dataSource: "cylinder.split.1x2"
+        case .connection: "cylinder.split.1x2"
         case .about: "info.circle"
         }
     }
 }
 
-nonisolated enum ProviderSetupSheet: String, Identifiable, Equatable, Sendable {
-    case claude
-    case codex
-    case kimi
-
-    var id: Self { self }
-}
-
 @MainActor
 final class SettingsNavigationModel: ObservableObject {
     @Published var selectedSection: SettingsSection = .general
-    @Published var activeSetupSheet: ProviderSetupSheet?
     @Published var availableUpdateVersion: String?
     @Published var installedVersion: String = ""
     @Published var installedBuild: String = ""
@@ -57,11 +48,6 @@ final class SettingsNavigationModel: ObservableObject {
     var onGlobalHotkeyChange: (GlobalHotkey?) -> Void = { _ in }
     var onGlobalHotkeyRecordingChanged: (Bool) -> Void = { _ in }
     var loadCPAConnection: () async -> CPAConnection? = { await CredentialStorage.shared.cpaConnection }
-    var loadClaudeCredentials: () async -> (sessionKey: String, organizationId: String) = {
-        let sessionKey = await CredentialStorage.shared.sessionKey ?? ""
-        let organizationId = await CredentialStorage.shared.organizationId ?? ""
-        return (sessionKey, organizationId)
-    }
 }
 
 struct SettingsView: View {
@@ -93,9 +79,9 @@ struct SettingsView: View {
                 case .general:
                     GeneralSettingsPane(viewModel: viewModel, navigation: navigation)
                 case .providers:
-                    ProvidersSettingsPane(viewModel: viewModel, navigation: navigation)
-                case .dataSource:
-                    DataSourceSettingsPane(viewModel: viewModel, navigation: navigation)
+                    ProvidersSettingsPane(viewModel: viewModel)
+                case .connection:
+                    ConnectionSettingsPane(viewModel: viewModel, navigation: navigation)
                 case .about:
                     AboutSettingsPane(navigation: navigation)
                 }
@@ -104,16 +90,6 @@ struct SettingsView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 580, minHeight: 400)
-        .sheet(item: $navigation.activeSetupSheet) { sheet in
-            switch sheet {
-            case .claude:
-                ClaudeSetupSheet(viewModel: viewModel, navigation: navigation)
-            case .codex:
-                CodexSetupSheet(navigation: navigation)
-            case .kimi:
-                KimiSetupSheet(viewModel: viewModel)
-            }
-        }
     }
 
     private var sidebarFooter: some View {
@@ -124,7 +100,7 @@ struct SettingsView: View {
                     Text("v\(navigation.installedVersion)")
                 }
                 Spacer()
-                Text(viewModel.source == .cpa ? "CPA" : "Direct")
+                Text("CLIProxyAPI")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -245,17 +221,15 @@ private struct GeneralSettingsPane: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Data Source") {
+            Section("Connection") {
                 LabeledContent {
                     Button("Configure…") {
-                        navigation.selectedSection = .dataSource
+                        navigation.selectedSection = .connection
                     }
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Active Source")
-                        Text(viewModel.source == .cpa
-                             ? "CLIProxyAPI (remote accounts)"
-                             : "Direct (local CLI and saved credentials)")
+                        Text("CLIProxyAPI")
+                        Text(viewModel.isCPAConfigured == true ? "Configuration saved" : "Set up a connection")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -420,33 +394,18 @@ private struct GlobalHotkeyRecorderView: View {
 
 private struct ProvidersSettingsPane: View {
     @ObservedObject var viewModel: UsageViewModel
-    @ObservedObject var navigation: SettingsNavigationModel
-
-    private var displayedProviders: [DisplayProvider] {
-        if viewModel.source == .cpa {
-            return DisplayProvider.displayOrder
-        }
-        return DisplayProvider.displayOrder.filter { $0 != .antigravity }
-    }
 
     var body: some View {
         Form {
             Section {
-                ForEach(displayedProviders, id: \.self) { provider in
+                ForEach(DisplayProvider.displayOrder, id: \.self) { provider in
                     providerRow(for: provider)
                 }
             } header: {
-                Text(viewModel.source == .cpa ? "Visible Providers (CLIProxyAPI)" : "Providers & Accounts (Direct)")
-            } footer: {
-                if viewModel.source == .direct {
-                    Text("Usagebar automatically detects local credentials from Claude Code, Codex, Cursor, Kimi Code, Z.ai, and Grok Build.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Visible Providers")
             }
 
-            if viewModel.source == .cpa,
-               viewModel.hasAntigravityAccounts || !viewModel.hiddenAntigravityPoolIDs.isEmpty {
+            if viewModel.hasAntigravityAccounts || !viewModel.hiddenAntigravityPoolIDs.isEmpty {
                 antigravityPoolsSection
             }
         }
@@ -469,10 +428,6 @@ private struct ProvidersSettingsPane: View {
 
             Spacer(minLength: 8)
 
-            if viewModel.source == .direct {
-                directActionControls(for: provider)
-            }
-
             let isLocked = viewModel.isLastVisibleAvailableProvider(provider)
             Toggle("", isOn: Binding(
                 get: { viewModel.isProviderShown(provider) },
@@ -484,56 +439,6 @@ private struct ProvidersSettingsPane: View {
             .help(isLocked ? "At least one active provider must remain visible." : "Show \(provider.panelTitle) in the panel")
         }
         .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
-    private func directActionControls(for provider: DisplayProvider) -> some View {
-        switch provider {
-        case .claude:
-            if viewModel.hasClaudeCredentials {
-                if viewModel.claudeError != nil {
-                    Button("Set Up…") {
-                        navigation.activeSetupSheet = .claude
-                    }
-                    .controlSize(.small)
-                }
-                Button("Sign Out") {
-                    viewModel.clearClaudeCredentials()
-                }
-                .controlSize(.small)
-            } else {
-                Button("Set Up…") {
-                    navigation.activeSetupSheet = .claude
-                }
-                .controlSize(.small)
-            }
-        case .codex:
-            if viewModel.hasCodexCredentials {
-                Button("Sign Out") {
-                    viewModel.clearCodexCredentials()
-                }
-                .controlSize(.small)
-            } else {
-                Button("Set Up…") {
-                    navigation.activeSetupSheet = .codex
-                }
-                .controlSize(.small)
-            }
-        case .kimi:
-            if viewModel.hasSavedKimiCredential {
-                Button("Forget Key") {
-                    viewModel.clearKimiCredential()
-                }
-                .controlSize(.small)
-            } else if !viewModel.hasKimiCredentials {
-                Button("Set Up…") {
-                    navigation.activeSetupSheet = .kimi
-                }
-                .controlSize(.small)
-            }
-        case .antigravity, .cursor, .zai, .xai:
-            EmptyView()
-        }
     }
 
     private var antigravityPoolsSection: some View {
@@ -573,52 +478,23 @@ private struct ProvidersSettingsPane: View {
     }
 
     private func statusText(for provider: DisplayProvider) -> String {
-        if viewModel.source == .cpa {
-            let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
-            guard !accounts.isEmpty else { return "No accounts in CPA" }
-            let countLabel = accounts.count == 1 ? "1 account" : "\(accounts.count) accounts"
-            var parts = [countLabel]
-            if provider == .antigravity {
-                let poolCount = viewModel.discoveredAntigravityPools.count
-                if poolCount > 0 {
-                    parts.append(poolCount == 1 ? "1 pool" : "\(poolCount) pools")
-                }
-            }
-            if let lastSuccess = accounts.compactMap(\.refresh.lastSuccess).max() {
-                let minutes = max(0, Int(Date().timeIntervalSince(lastSuccess) / 60))
-                parts.append(minutes == 0 ? "Updated just now" : "Updated \(minutes)m ago")
-            }
-            return parts.joined(separator: " · ")
-        }
-
-        let isAvailable = viewModel.availableProviders.contains(provider)
-        guard isAvailable else {
-            switch provider {
-            case .claude: return "Not signed in — run `claude` in Terminal or set up manually"
-            case .codex: return "Not signed in — run `codex login` in Terminal"
-            case .kimi: return "Not configured — run `kimi login` or paste a credential"
-            case .cursor, .zai, .xai: return "Not detected on this Mac"
-            case .antigravity: return "CLIProxyAPI only"
+        let accounts = viewModel.cpaAccounts.filter { $0.provider == provider }
+        if viewModel.isCPAConfigured == false { return "Connect to CLIProxyAPI in Connection settings" }
+        if accounts.isEmpty && viewModel.cpaError != nil { return "Account list unavailable" }
+        guard !accounts.isEmpty else { return "No accounts discovered" }
+        let countLabel = accounts.count == 1 ? "1 account" : "\(accounts.count) accounts"
+        var parts = [countLabel]
+        if provider == .antigravity {
+            let poolCount = viewModel.discoveredAntigravityPools.count
+            if poolCount > 0 {
+                parts.append(poolCount == 1 ? "1 pool" : "\(poolCount) pools")
             }
         }
-
-        let freshness = viewModel.freshnessText(for: provider)
-        switch provider {
-        case .claude:
-            let auth: String = switch viewModel.claudeAuthSource {
-            case .oauth: "OAuth"
-            case .webSession: "Browser session"
-            case .none: "Connected"
-            }
-            return "\(auth) · \(freshness)"
-        case .codex:
-            return "CLI · \(freshness)"
-        case .kimi:
-            let auth = viewModel.kimiAuthSource.displayName
-            return auth.isEmpty ? freshness : "\(auth) · \(freshness)"
-        case .cursor, .zai, .xai, .antigravity:
-            return "Detected · \(freshness)"
+        if let lastSuccess = accounts.compactMap(\.refresh.lastSuccess).max() {
+            let minutes = max(0, Int(Date().timeIntervalSince(lastSuccess) / 60))
+            parts.append(minutes == 0 ? "Updated just now" : "Updated \(minutes)m ago")
         }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -646,192 +522,9 @@ private struct ProviderMarkView: View {
     }
 }
 
-// MARK: - Provider Setup Sheets
+// MARK: - Connection
 
-private struct ClaudeSetupSheet: View {
-    @ObservedObject var viewModel: UsageViewModel
-    @ObservedObject var navigation: SettingsNavigationModel
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var organizationId = ""
-    @State private var sessionKey = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Set Up Claude")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Recommended: Claude Code CLI")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text("Open Terminal, run `claude`, and log in when prompted. Then click Refresh in Usagebar. Re-logging in from Terminal also fixes expired sessions.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Refresh Credentials") {
-                    navigation.onRefresh()
-                    dismiss()
-                }
-                .controlSize(.small)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Manual Browser Session (Advanced)")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Organization ID")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    Text("From URL: claude.ai/chat → copy UUID after /organizations/")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField("263e9fcb-52b9-4372-8842-…", text: $organizationId)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Session Key")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    Text("From DevTools → Application → Cookies → sessionKey")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    PasswordField(prompt: "sk-ant-sid01-…", text: $sessionKey)
-                }
-
-                Text("Credentials are encrypted locally on this Mac.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Save") {
-                    viewModel.saveCredentials(
-                        sessionKey: sessionKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                        organizationId: organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
-                    )
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(
-                    sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    organizationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-        .task {
-            let existing = await navigation.loadClaudeCredentials()
-            if sessionKey.isEmpty { sessionKey = existing.sessionKey }
-            if organizationId.isEmpty { organizationId = existing.organizationId }
-        }
-    }
-}
-
-private struct CodexSetupSheet: View {
-    @ObservedObject var navigation: SettingsNavigationModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Set Up Codex")
-                .font(.headline)
-
-            Text("Run `codex login` in Terminal, then click Refresh in Usagebar. Usagebar reads Codex CLI's local credentials without modifying them.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Spacer()
-                Button("Close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Refresh Now") {
-                    navigation.onRefresh()
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 380)
-    }
-}
-
-private struct KimiSetupSheet: View {
-    @ObservedObject var viewModel: UsageViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var credential = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Set Up Kimi Code")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Recommended: Kimi Code CLI")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text("Run `kimi login` in Terminal, then click Refresh in Usagebar. Usagebar reads Kimi Code CLI's local OAuth credential.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Open Kimi Code Console") {
-                    if let url = URL(string: "https://www.kimi.com/code/console") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .controlSize(.small)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("API Key or Web Token")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text("Paste a Kimi Code API key or the `kimi-auth` token from the Kimi Code console. It is encrypted locally.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                PasswordField(prompt: "API key or kimi-auth token", text: $credential)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Save") {
-                    let trimmed = credential.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    viewModel.saveKimiCredential(trimmed)
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-    }
-}
-
-// MARK: - Data Source
-
-private struct DataSourceSettingsPane: View {
+private struct ConnectionSettingsPane: View {
     @ObservedObject var viewModel: UsageViewModel
     @ObservedObject var navigation: SettingsNavigationModel
 
@@ -852,49 +545,6 @@ private struct DataSourceSettingsPane: View {
 
     var body: some View {
         Form {
-            Section("Source Mode") {
-                HStack(spacing: 10) {
-                    SourceOptionCard(
-                        title: "Direct",
-                        subtitle: "Read local CLI & saved credentials on this Mac",
-                        selected: viewModel.source == .direct
-                    ) {
-                        guard viewModel.source != .direct else { return }
-                        run {
-                            await viewModel.useDirectSource()
-                            statusMessage = "Switched to Direct source."
-                            statusIsError = false
-                        }
-                    }
-
-                    SourceOptionCard(
-                        title: "CLIProxyAPI",
-                        subtitle: "Query accounts through a CPA management server",
-                        selected: viewModel.source == .cpa
-                    ) {
-                        guard viewModel.source != .cpa else { return }
-                        if !trimmedAddress.isEmpty && !trimmedKey.isEmpty {
-                            run {
-                                try await viewModel.testAndEnableCPA(address: trimmedAddress, key: trimmedKey)
-                                hasSavedCPA = true
-                                statusMessage = "CLIProxyAPI connection enabled."
-                                statusIsError = false
-                            }
-                        } else if hasSavedCPA {
-                            run {
-                                try await viewModel.useSavedCPA()
-                                statusMessage = "CLIProxyAPI connection enabled."
-                                statusIsError = false
-                            }
-                        } else {
-                            statusMessage = "Enter a CPA base address and management key below, then click Test & Enable."
-                            statusIsError = false
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-
             Section {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Base Address")
@@ -920,13 +570,13 @@ private struct DataSourceSettingsPane: View {
                             .font(.caption)
                             .foregroundStyle(statusIsError ? Color.red : Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                    } else if viewModel.source == .cpa {
-                        let count = viewModel.cpaAccounts.count
-                        Text("Connected · \(count) \(count == 1 ? "account" : "accounts") discovered")
+                    } else if let connectionError = viewModel.cpaError {
+                        Text(connectionError)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else if hasSavedCPA {
-                        Text("Saved CPA configuration is kept while using Direct.")
+                        Text("Configuration saved")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -943,13 +593,13 @@ private struct DataSourceSettingsPane: View {
                             statusIsError = false
                         }
                     }
-                    .disabled(!hasSavedCPA && trimmedAddress.isEmpty && trimmedKey.isEmpty)
+                    .disabled(!hasSavedCPA)
 
-                    Button("Test & Enable") {
+                    Button("Test & Save") {
                         run {
-                            try await viewModel.testAndEnableCPA(address: trimmedAddress, key: trimmedKey)
+                            try await viewModel.testAndSaveCPA(address: trimmedAddress, key: trimmedKey)
                             hasSavedCPA = true
-                            statusMessage = "Connection verified and enabled."
+                            statusMessage = "Connection verified and saved."
                             statusIsError = false
                         }
                     }
@@ -988,47 +638,6 @@ private struct DataSourceSettingsPane: View {
                     ?? "Could not save or connect. Check the address, key, and network."
             }
         }
-    }
-}
-
-private struct SourceOptionCard: View {
-    let title: String
-    let subtitle: String
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(title)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.03))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: selected ? 1.5 : 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

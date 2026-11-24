@@ -48,7 +48,8 @@ if [[ -f "$assets" ]]; then
   mkdir -p "$TEST_APP/Contents/Resources"
   cp "$assets" "$TEST_APP/Contents/Resources/Assets.car"
 fi
-xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -O \
+# Keep assertion messages and source locations in CI rendering failures.
+xcrun swiftc -swift-version 5 -default-isolation MainActor -parse-as-library -Onone \
   "$ROOT_DIR"/JustaUsageBar/Models/*.swift \
   "$ROOT_DIR"/JustaUsageBar/Services/*.swift \
   "$ROOT_DIR/JustaUsageBar/Views/SettingsView.swift" \
